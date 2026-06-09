@@ -1,0 +1,173 @@
+FULL RECOVERY MODE.
+
+I uploaded two files:
+
+1. Hustle-Coin.zip
+2. hustlecoin.db
+
+IMPORTANT RULES:
+
+- Do NOT create a new project.
+- Do NOT create a new database.
+- Do NOT seed fake users.
+- Do NOT create placeholder balances.
+- Do NOT create dummy tasks.
+- Do NOT overwrite any existing data.
+- Do NOT redesign the application.
+- Do NOT change Telegram settings.
+- Preserve all existing data.
+
+PHASE 1 — PROJECT IMPORT
+
+1. Extract Hustle-Coin.zip.
+2. Audit the entire project structure.
+3. Identify:
+   - Frontend
+   - Backend
+   - Database layer
+   - Telegram integration
+   - Admin panel
+   - Tasks system
+   - Referral system
+   - Wallet system
+   - Achievement system
+
+4. Make the extracted project the active project.
+
+PHASE 2 — DATABASE RECOVERY
+
+1. Inspect hustlecoin.db completely.
+2. List all tables.
+3. Count rows in every table.
+4. Identify:
+   - Users
+   - Referrals
+   - Tasks
+   - Balances
+   - Mining logs
+   - Achievements
+   - Admin records
+
+5. Generate a complete database audit report.
+
+PHASE 3 — DATA PRESERVATION
+
+1. Create a backup of hustlecoin.db before making changes.
+2. Verify whether the project currently uses SQLite or PostgreSQL.
+3. If the project expects PostgreSQL:
+   - Create a safe migration plan.
+   - Import data from hustlecoin.db into PostgreSQL.
+   - Use non-destructive migration.
+   - Never delete records.
+   - Never overwrite records.
+   - Use UPSERT logic only.
+
+PHASE 4 — APPLICATION RECOVERY
+
+1. Start frontend.
+2. Start backend.
+3. Fix configuration issues only.
+4. Fix workflow issues only.
+5. Fix port conflicts only.
+6. Verify:
+   - Tasks page
+   - Referral page
+   - Leaderboard
+   - Wallet
+   - Achievements
+   - Profile page
+   - Telegram login
+
+PHASE 5 — ADMIN ACCOUNT
+
+My Telegram ID is:
+
+7035629762
+
+Verify:
+- Admin permissions
+- Admin routes
+- Admin panel visibility
+- Admin dashboard access
+
+Do not create a new admin system.
+
+PHASE 6 — SOCIAL LINKS
+
+Verify all social tasks and links.
+
+Required links:
+
+Telegram Channel:
+https://t.me/HustleCoin_HSL
+
+Telegram Community:
+https://t.me/HustleCoinHSL
+
+X:
+https://x.com/hustlecoin_HSL
+
+TikTok:
+https://www.tiktok.com/@hustlecoin0
+
+
+PHASE 6.5 — MINING SYSTEM AUDIT AND RECOVERY
+
+The mining system must be audited and fixed if necessary.
+
+Requirements:
+
+1. Verify the mining cooldown system.
+2. Verify users can mine again after 24 hours.
+3. Verify the cooldown timer is calculated correctly.
+4. Verify the next mining time is stored correctly in the database.
+5. Verify mining rewards are credited correctly.
+6. Verify mining history is recorded correctly.
+7. Verify the frontend countdown timer works correctly.
+8. Verify the backend mining validation works correctly.
+9. Fix any issue that prevents users from mining again after the cooldown expires.
+10. Verify the dashboard displays:
+    - Current balance
+    - Mining reward
+    - Next mining time
+    - Remaining cooldown
+
+IMPORTANT:
+
+- Do not reset mining history.
+- Do not delete mining records.
+- Do not create fake mining records.
+- Preserve all existing user balances.
+- Preserve all existing mining data.
+
+Provide a mining audit report showing:
+
+- Current mining reward
+- Current cooldown duration
+- Number of mining records
+- Whether mining works after 24 hours
+- Any bugs found
+- Any fixes applied
+
+PHASE 7 — FINAL REPORT
+
+Provide:
+
+1. Frontend status
+2. Backend status
+3. Database status
+4. Number of recovered users
+5. Number of recovered referrals
+6. Number of recovered tasks
+7. Number of recovered achievements
+8. Admin panel status
+9. Remaining issues
+10. Recommended next steps
+
+
+
+AUDIT FIRST.
+
+RECOVER DATA FIRST.
+
+DO NOT CREATE NEW FEATURES UNTIL RECOVERY IS COMPLETE.

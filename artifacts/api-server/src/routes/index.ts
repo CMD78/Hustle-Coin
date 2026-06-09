@@ -1,8 +1,38 @@
 import { Router, type IRouter } from "express";
 import healthRouter from "./health";
+import initRouter from "./init";
+import profileRouter from "./profile";
+import miningRouter from "./mining";
+import tasksRouter from "./tasks";
+import questsRouter from "./quests";
+import achievementsRouter from "./achievements";
+import referralsRouter from "./referrals";
+import leaderboardRouter from "./leaderboard";
+import feedbackRouter from "./feedback";
+import dashboardRouter from "./dashboard";
+import adminRouter from "./admin";
+import walletRouter from "./wallet";
+import telegramRouter from "./telegram";
+import announcementsRouter from "./announcements";
+import settingsRouter from "./settings";
 
 const router: IRouter = Router();
 
 router.use(healthRouter);
+router.use(initRouter);
+router.use(profileRouter);
+router.use(miningRouter);
+router.use(tasksRouter);
+router.use(questsRouter);
+router.use(achievementsRouter);
+router.use(referralsRouter);
+router.use(leaderboardRouter);
+router.use(feedbackRouter);
+router.use(dashboardRouter);
+router.use(adminRouter);
+router.use(walletRouter);
+router.use(telegramRouter);
+router.use(announcementsRouter);
+router.use(settingsRouter);
 
 export default router;

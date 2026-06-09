@@ -1,22 +1,41 @@
 openapi: 3.1.0
 info:
-  # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: HustleCoin Telegram Mini App API
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: auth
+    description: Authentication
+  - name: user
+    description: User profile and data
+  - name: mining
+    description: Mining operations
+  - name: tasks
+    description: Task management
+  - name: quests
+    description: Daily quests
+  - name: achievements
+    description: Achievements
+  - name: referrals
+    description: Referral system
+  - name: leaderboard
+    description: Leaderboard
+  - name: feedback
+    description: User feedback
+  - name: admin
+    description: Admin operations
+
 paths:
   /healthz:
     get:
       operationId: healthCheck
       tags: [health]
       summary: Health check
-      description: Returns server health status
       responses:
         "200":
           description: Healthy
@@ -24,6 +43,469 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  /init:
+    post:
+      operationId: initUser
+      tags: [auth]
+      summary: Initialize or authenticate a Telegram user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TelegramInitData"
+      responses:
+        "200":
+          description: User initialized or loaded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserProfile"
+        "400":
+          description: Invalid init data
+
+  /profile:
+    get:
+      operationId: getProfile
+      tags: [user]
+      summary: Get current user profile
+      parameters:
+        - name: telegramId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: User profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserProfile"
+        "404":
+          description: User not found
+
+  /mine:
+    post:
+      operationId: mineHp
+      tags: [mining]
+      summary: Mine HP coins
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MineRequest"
+      responses:
+        "200":
+          description: Mining result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MineResult"
+        "400":
+          description: Cannot mine yet (cooldown active)
+
+  /mine/history:
+    get:
+      operationId: getMineHistory
+      tags: [mining]
+      summary: Get mining history for a user
+      parameters:
+        - name: telegramId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 20
+      responses:
+        "200":
+          description: Mining history
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/MineLog"
+
+  /tasks:
+    get:
+      operationId: getTasks
+      tags: [tasks]
+      summary: Get all available tasks
+      parameters:
+        - name: telegramId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: List of tasks with completion status
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TaskWithStatus"
+
+  /tasks/{taskId}/complete:
+    post:
+      operationId: completeTask
+      tags: [tasks]
+      summary: Mark a task as completed
+      parameters:
+        - name: taskId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TaskCompleteRequest"
+      responses:
+        "200":
+          description: Task completion submitted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaskCompletion"
+        "400":
+          description: Already completed or invalid
+
+  /quests:
+    get:
+      operationId: getQuests
+      tags: [quests]
+      summary: Get daily quests and progress
+      parameters:
+        - name: telegramId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Daily quests with progress
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/QuestWithProgress"
+
+  /achievements:
+    get:
+      operationId: getAchievements
+      tags: [achievements]
+      summary: Get all achievements with unlock status
+      parameters:
+        - name: telegramId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Achievements list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AchievementWithStatus"
+
+  /referrals:
+    get:
+      operationId: getReferrals
+      tags: [referrals]
+      summary: Get referral info and stats for a user
+      parameters:
+        - name: telegramId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Referral stats and list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReferralStats"
+
+  /leaderboard:
+    get:
+      operationId: getLeaderboard
+      tags: [leaderboard]
+      summary: Get leaderboard data
+      parameters:
+        - name: type
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [hp, referrals, streak, mining]
+            default: hp
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+      responses:
+        "200":
+          description: Leaderboard entries
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/LeaderboardEntry"
+
+  /feedback:
+    post:
+      operationId: submitFeedback
+      tags: [feedback]
+      summary: Submit user feedback
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FeedbackInput"
+      responses:
+        "201":
+          description: Feedback submitted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Feedback"
+
+  /dashboard:
+    get:
+      operationId: getDashboard
+      tags: [user]
+      summary: Get dashboard summary for a user
+      parameters:
+        - name: telegramId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Dashboard summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardSummary"
+
+  /admin/stats:
+    get:
+      operationId: getAdminStats
+      tags: [admin]
+      summary: Get admin growth analytics
+      parameters:
+        - name: telegramId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Admin statistics
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminStats"
+        "403":
+          description: Forbidden
+
+  /admin/users:
+    get:
+      operationId: getAdminUsers
+      tags: [admin]
+      summary: Get all users (admin)
+      parameters:
+        - name: telegramId
+          in: query
+          required: true
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 50
+        - name: offset
+          in: query
+          required: false
+          schema:
+            type: integer
+            default: 0
+      responses:
+        "200":
+          description: Users list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AdminUser"
+        "403":
+          description: Forbidden
+
+  /admin/grant-hp:
+    post:
+      operationId: grantHp
+      tags: [admin]
+      summary: Grant or remove HP from a user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GrantHpRequest"
+      responses:
+        "200":
+          description: HP updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UserProfile"
+        "403":
+          description: Forbidden
+
+  /admin/broadcast:
+    post:
+      operationId: broadcastMessage
+      tags: [admin]
+      summary: Broadcast announcement to all users
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BroadcastInput"
+      responses:
+        "200":
+          description: Broadcast queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BroadcastResult"
+        "403":
+          description: Forbidden
+
+  /admin/feedback:
+    get:
+      operationId: getAdminFeedback
+      tags: [admin]
+      summary: Get all feedback (admin)
+      parameters:
+        - name: telegramId
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: All feedback
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Feedback"
+        "403":
+          description: Forbidden
+
+  /admin/tasks:
+    post:
+      operationId: createTask
+      tags: [admin]
+      summary: Create a new task (admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TaskInput"
+      responses:
+        "201":
+          description: Task created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+        "403":
+          description: Forbidden
+
+  /admin/tasks/{taskId}:
+    patch:
+      operationId: updateTask
+      tags: [admin]
+      summary: Update a task (admin)
+      parameters:
+        - name: taskId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TaskUpdate"
+      responses:
+        "200":
+          description: Task updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Task"
+        "403":
+          description: Forbidden
+
+  /admin/tasks/{taskId}/approve:
+    post:
+      operationId: approveTaskCompletion
+      tags: [admin]
+      summary: Approve a task completion and reward HP
+      parameters:
+        - name: taskId
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApproveTaskRequest"
+      responses:
+        "200":
+          description: Task approved and HP rewarded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaskCompletion"
+        "403":
+          description: Forbidden
+
 components:
   schemas:
     HealthStatus:
@@ -34,3 +516,420 @@ components:
       required:
         - status
 
+    TelegramInitData:
+      type: object
+      required: [telegramId, username, firstName]
+      properties:
+        telegramId:
+          type: string
+        username:
+          type: string
+        firstName:
+          type: string
+        lastName:
+          type: ["string", "null"]
+        referredBy:
+          type: ["string", "null"]
+        initData:
+          type: ["string", "null"]
+
+    UserProfile:
+      type: object
+      required: [id, telegramId, username, firstName, balance, level, streak, totalMines, referralCount, achievementCount, joinDate, rank]
+      properties:
+        id:
+          type: integer
+        telegramId:
+          type: string
+        username:
+          type: string
+        firstName:
+          type: string
+        lastName:
+          type: ["string", "null"]
+        balance:
+          type: integer
+        level:
+          type: integer
+        streak:
+          type: integer
+        totalMines:
+          type: integer
+        lastMine:
+          type: ["string", "null"]
+        canMine:
+          type: boolean
+        mineCountdown:
+          type: ["integer", "null"]
+        referralCount:
+          type: integer
+        achievementCount:
+          type: integer
+        joinDate:
+          type: string
+        rank:
+          type: ["integer", "null"]
+        badges:
+          type: array
+          items:
+            type: string
+
+    MineRequest:
+      type: object
+      required: [telegramId]
+      properties:
+        telegramId:
+          type: string
+
+    MineResult:
+      type: object
+      required: [success, hpEarned, newBalance, streak, bonusHp, message]
+      properties:
+        success:
+          type: boolean
+        hpEarned:
+          type: integer
+        bonusHp:
+          type: integer
+        newBalance:
+          type: integer
+        streak:
+          type: integer
+        message:
+          type: string
+        nextMineAt:
+          type: ["string", "null"]
+
+    MineLog:
+      type: object
+      required: [id, telegramId, hpEarned, minedAt, streak]
+      properties:
+        id:
+          type: integer
+        telegramId:
+          type: string
+        hpEarned:
+          type: integer
+        bonusHp:
+          type: integer
+        streak:
+          type: integer
+        minedAt:
+          type: string
+
+    Task:
+      type: object
+      required: [id, title, description, reward, status]
+      properties:
+        id:
+          type: integer
+        title:
+          type: string
+        description:
+          type: string
+        reward:
+          type: integer
+        link:
+          type: ["string", "null"]
+        status:
+          type: string
+          enum: [active, inactive]
+        createdAt:
+          type: string
+
+    TaskWithStatus:
+      type: object
+      required: [id, title, description, reward, status, completed, approved]
+      properties:
+        id:
+          type: integer
+        title:
+          type: string
+        description:
+          type: string
+        reward:
+          type: integer
+        link:
+          type: ["string", "null"]
+        status:
+          type: string
+          enum: [active, inactive]
+        completed:
+          type: boolean
+        approved:
+          type: boolean
+        completedAt:
+          type: ["string", "null"]
+
+    TaskInput:
+      type: object
+      required: [title, description, reward, adminTelegramId]
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+        reward:
+          type: integer
+        link:
+          type: ["string", "null"]
+        adminTelegramId:
+          type: string
+
+    TaskUpdate:
+      type: object
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+        reward:
+          type: integer
+        link:
+          type: ["string", "null"]
+        status:
+          type: string
+          enum: [active, inactive]
+        adminTelegramId:
+          type: string
+
+    TaskCompleteRequest:
+      type: object
+      required: [telegramId]
+      properties:
+        telegramId:
+          type: string
+
+    TaskCompletion:
+      type: object
+      required: [id, taskId, telegramId, approved, completedAt]
+      properties:
+        id:
+          type: integer
+        taskId:
+          type: integer
+        telegramId:
+          type: string
+        approved:
+          type: boolean
+        completedAt:
+          type: string
+
+    ApproveTaskRequest:
+      type: object
+      required: [telegramId, adminTelegramId]
+      properties:
+        telegramId:
+          type: string
+        adminTelegramId:
+          type: string
+
+    QuestWithProgress:
+      type: object
+      required: [id, title, description, reward, questType, completed, progress, target]
+      properties:
+        id:
+          type: integer
+        title:
+          type: string
+        description:
+          type: string
+        reward:
+          type: integer
+        questType:
+          type: string
+          enum: [mine, complete_task, invite_friend]
+        completed:
+          type: boolean
+        progress:
+          type: integer
+        target:
+          type: integer
+
+    AchievementWithStatus:
+      type: object
+      required: [id, title, description, icon, unlocked]
+      properties:
+        id:
+          type: integer
+        title:
+          type: string
+        description:
+          type: string
+        icon:
+          type: string
+        unlocked:
+          type: boolean
+        unlockedAt:
+          type: ["string", "null"]
+
+    ReferralStats:
+      type: object
+      required: [telegramId, referralCode, referralLink, totalReferrals, totalEarned, referrals]
+      properties:
+        telegramId:
+          type: string
+        referralCode:
+          type: string
+        referralLink:
+          type: string
+        totalReferrals:
+          type: integer
+        totalEarned:
+          type: integer
+        referrals:
+          type: array
+          items:
+            $ref: "#/components/schemas/ReferralEntry"
+
+    ReferralEntry:
+      type: object
+      required: [telegramId, username, firstName, joinDate, hpEarned]
+      properties:
+        telegramId:
+          type: string
+        username:
+          type: string
+        firstName:
+          type: string
+        joinDate:
+          type: string
+        hpEarned:
+          type: integer
+
+    LeaderboardEntry:
+      type: object
+      required: [rank, telegramId, username, firstName, value]
+      properties:
+        rank:
+          type: integer
+        telegramId:
+          type: string
+        username:
+          type: string
+        firstName:
+          type: string
+        value:
+          type: integer
+        badge:
+          type: ["string", "null"]
+
+    FeedbackInput:
+      type: object
+      required: [telegramId, message]
+      properties:
+        telegramId:
+          type: string
+        message:
+          type: string
+
+    Feedback:
+      type: object
+      required: [id, telegramId, message, createdAt]
+      properties:
+        id:
+          type: integer
+        telegramId:
+          type: string
+        message:
+          type: string
+        adminReply:
+          type: ["string", "null"]
+        createdAt:
+          type: string
+
+    DashboardSummary:
+      type: object
+      required: [user, questsCompleted, questsTotal, activeTasksCount, recentAchievements]
+      properties:
+        user:
+          $ref: "#/components/schemas/UserProfile"
+        questsCompleted:
+          type: integer
+        questsTotal:
+          type: integer
+        activeTasksCount:
+          type: integer
+        recentAchievements:
+          type: array
+          items:
+            $ref: "#/components/schemas/AchievementWithStatus"
+
+    AdminStats:
+      type: object
+      required: [totalUsers, newUsersToday, newUsersThisWeek, activeUsersToday, activeUsersThisWeek, averageHp, totalReferrals, totalAchievements, totalMines]
+      properties:
+        totalUsers:
+          type: integer
+        newUsersToday:
+          type: integer
+        newUsersThisWeek:
+          type: integer
+        activeUsersToday:
+          type: integer
+        activeUsersThisWeek:
+          type: integer
+        averageHp:
+          type: integer
+        totalReferrals:
+          type: integer
+        totalAchievements:
+          type: integer
+        totalMines:
+          type: integer
+
+    AdminUser:
+      type: object
+      required: [id, telegramId, username, firstName, balance, level, streak, joinDate, totalMines, referralCount]
+      properties:
+        id:
+          type: integer
+        telegramId:
+          type: string
+        username:
+          type: string
+        firstName:
+          type: string
+        balance:
+          type: integer
+        level:
+          type: integer
+        streak:
+          type: integer
+        joinDate:
+          type: string
+        totalMines:
+          type: integer
+        referralCount:
+          type: integer
+
+    GrantHpRequest:
+      type: object
+      required: [adminTelegramId, targetTelegramId, amount, reason]
+      properties:
+        adminTelegramId:
+          type: string
+        targetTelegramId:
+          type: string
+        amount:
+          type: integer
+        reason:
+          type: string
+
+    BroadcastInput:
+      type: object
+      required: [adminTelegramId, message]
+      properties:
+        adminTelegramId:
+          type: string
+        message:
+          type: string
+
+    BroadcastResult:
+      type: object
+      required: [success, message]
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
