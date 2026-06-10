@@ -48,6 +48,12 @@ export function TelegramProvider({ children }: { children: ReactNode }) {
     setTelegramId(currentTelegramId);
     localStorage.setItem("telegramId", currentTelegramId);
 
+    // DEBUG: report what Telegram SDK returned so admin tab issue can be diagnosed
+    console.log("[TelegramProvider] tg object present:", !!tg);
+    console.log("[TelegramProvider] tg.initDataUnsafe.user:", tg?.initDataUnsafe?.user ?? "undefined — no Telegram session (browser/dev)");
+    console.log("[TelegramProvider] telegramId resolved to:", currentTelegramId);
+    console.log("[TelegramProvider] isAdmin:", currentTelegramId === "7035629762");
+
     // Telegram passes the bot start param via initDataUnsafe.start_param,
     // NOT via window.location.search — check SDK first, then fall back to URL
     const params = new URLSearchParams(window.location.search);
