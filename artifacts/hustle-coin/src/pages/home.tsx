@@ -1,6 +1,6 @@
 import { useTelegram } from "@/lib/telegram";
 import { useGetDashboard } from "@workspace/api-client-react";
-import { Coins, Zap, Trophy, ArrowRight } from "lucide-react";
+import { Coins, Zap, Trophy, ArrowRight, Pickaxe } from "lucide-react";
 import { Link } from "wouter";
 import { motion } from "framer-motion";
 
@@ -63,6 +63,17 @@ export default function Home() {
           </div>
         </div>
       </motion.div>
+
+      <Link href="/mine" className="bg-gradient-to-r from-yellow-500/20 to-amber-600/10 border border-yellow-500/40 p-4 rounded-2xl flex items-center gap-4 hover:border-yellow-400/70 transition-colors">
+        <div className="w-12 h-12 rounded-full bg-yellow-500/20 flex items-center justify-center border border-yellow-500/40 shrink-0">
+          <Pickaxe className="w-6 h-6 text-yellow-400" />
+        </div>
+        <div className="flex-1">
+          <h3 className="font-bold text-yellow-300">Mine HP</h3>
+          <p className="text-xs text-muted-foreground mt-0.5">{dashboard.user.canMine ? "Ready to mine — tap to earn HP" : "Cooldown active"}</p>
+        </div>
+        <ArrowRight className="w-5 h-5 text-yellow-400/70 shrink-0" />
+      </Link>
 
       <div className="grid grid-cols-2 gap-4">
         <Link href="/quests" className="bg-card border border-border p-4 rounded-2xl flex flex-col hover:border-primary/50 transition-colors">

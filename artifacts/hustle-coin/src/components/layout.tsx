@@ -1,5 +1,5 @@
 import { Link, useLocation } from "wouter";
-import { Home, CheckSquare, Users, Trophy, Wallet, User, ShieldCheck } from "lucide-react";
+import { Home, CheckSquare, Users, Trophy, User, ShieldCheck, Pickaxe } from "lucide-react";
 import { useTelegram } from "@/lib/telegram";
 
 const ADMIN_ID = "7035629762";
@@ -11,10 +11,10 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
   const tabs = [
     { href: "/", icon: Home, label: "Home" },
+    { href: "/mine", icon: Pickaxe, label: "Mine" },
     { href: "/tasks", icon: CheckSquare, label: "Tasks" },
     { href: "/referrals", icon: Users, label: "Refer" },
     { href: "/leaderboard", icon: Trophy, label: "Rank" },
-    { href: "/wallet", icon: Wallet, label: "Wallet" },
     { href: "/profile", icon: User, label: "Profile" },
     ...(isAdmin ? [{ href: "/admin", icon: ShieldCheck, label: "Admin" }] : []),
   ];
