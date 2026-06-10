@@ -1,8 +1,13 @@
 import { Link, useLocation } from "wouter";
-import { Home, CheckSquare, Users, Trophy, Wallet, User } from "lucide-react";
+import { Home, CheckSquare, Users, Trophy, Wallet, User, ShieldCheck } from "lucide-react";
+import { useTelegram } from "@/lib/telegram";
+
+const ADMIN_ID = "7035629762";
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
+  const { telegramId } = useTelegram();
+  const isAdmin = telegramId === ADMIN_ID;
 
   const tabs = [
     { href: "/", icon: Home, label: "Home" },
@@ -11,6 +16,7 @@ export default function Layout({ children }: { children: React.ReactNode }) {
     { href: "/leaderboard", icon: Trophy, label: "Rank" },
     { href: "/wallet", icon: Wallet, label: "Wallet" },
     { href: "/profile", icon: User, label: "Profile" },
+    ...(isAdmin ? [{ href: "/admin", icon: ShieldCheck, label: "Admin" }] : []),
   ];
 
   return (

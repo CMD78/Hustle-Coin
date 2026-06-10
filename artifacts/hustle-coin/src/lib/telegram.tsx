@@ -48,8 +48,14 @@ export function TelegramProvider({ children }: { children: ReactNode }) {
     setTelegramId(currentTelegramId);
     localStorage.setItem("telegramId", currentTelegramId);
 
+    // Telegram passes the bot start param via initDataUnsafe.start_param,
+    // NOT via window.location.search — check SDK first, then fall back to URL
     const params = new URLSearchParams(window.location.search);
-    const referredBy = params.get("start") || undefined;
+    const referredBy =
+      tg?.initDataUnsafe?.start_param ||
+      params.get("startapp") ||
+      params.get("start") ||
+      undefined;
 
     initUser.mutate({
       data: {

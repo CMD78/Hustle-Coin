@@ -20,7 +20,8 @@ export default function Mine() {
 
   useEffect(() => {
     if (profile?.mineCountdown && profile.mineCountdown > 0) {
-      setCountdown(Math.floor(profile.mineCountdown / 1000));
+      // mineCountdown is already in seconds from the API — do not divide by 1000
+      setCountdown(profile.mineCountdown);
     } else {
       setCountdown(null);
     }
