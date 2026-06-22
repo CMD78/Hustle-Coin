@@ -131,19 +131,33 @@ export async function updateQuestProgress(telegramId: string, questType: string)
         .where(and(eq(questProgressTable.questId, quest.id), eq(questProgressTable.telegramId, telegramId), eq(questProgressTable.date, today)));
 
       if (!existing) {
+        const isComplete = 1 >= quest.target;
         await db.insert(questProgressTable).values({
           questId: quest.id,
           telegramId,
           progress: 1,
-          completed: 1 >= quest.target ? 1 : 0,
+          completed: isComplete ? 1 : 0,
           date: today,
         });
+        if (isComplete) {
+          const [u] = await db.select().from(usersTable).where(eq(usersTable.telegramId, telegramId));
+          if (u) {
+            await db.update(usersTable).set({ balance: u.balance + quest.reward }).where(eq(usersTable.telegramId, telegramId));
+          }
+        }
       } else if (!existing.completed) {
         const newProgress = existing.progress + 1;
+        const isNowComplete = newProgress >= quest.target;
         await db
           .update(questProgressTable)
-          .set({ progress: newProgress, completed: newProgress >= quest.target ? 1 : 0 })
+          .set({ progress: newProgress, completed: isNowComplete ? 1 : 0 })
           .where(eq(questProgressTable.id, existing.id));
+        if (isNowComplete) {
+          const [u] = await db.select().from(usersTable).where(eq(usersTable.telegramId, telegramId));
+          if (u) {
+            await db.update(usersTable).set({ balance: u.balance + quest.reward }).where(eq(usersTable.telegramId, telegramId));
+          }
+        }
       }
     }
   } catch (err) {

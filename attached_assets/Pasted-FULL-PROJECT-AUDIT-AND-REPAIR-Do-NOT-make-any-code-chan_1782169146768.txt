@@ -1,0 +1,116 @@
+FULL PROJECT AUDIT AND REPAIR
+
+Do NOT make any code changes yet.
+
+First perform a complete system audit and produce a report.
+
+Check every feature individually:
+
+1. Telegram Login
+- User creation
+- Returning users
+- Session persistence
+- Telegram initData validation
+
+2. Mining System
+- Mine button behavior
+- Cooldown timer
+- Reward calculation
+- Streak bonuses
+- Balance updates
+- Total mines counter
+- Admin statistics
+- UI behavior
+- Compare against the original intended mining flow
+
+3. Referral System
+- Telegram start_param
+- Referral links
+- Referrer reward
+- Referee reward
+- Referral count
+- Duplicate prevention
+- Self-referral prevention
+- Database writes
+- Admin statistics
+
+4. Task System
+- Task loading
+- Task submission
+- Task approval
+- Task rejection
+- Reward distribution
+- Pending tasks counter
+- Admin panel integration
+
+5. Leaderboard
+- Balance ranking
+- Referral ranking
+- Streak ranking
+- Real-time updates
+
+6. Admin Panel
+- Total users
+- New users today
+- Total HC/HSL
+- Total mines
+- Referrals
+- Active today
+- Pending tasks
+- Reward statistics
+- User management
+- Grant rewards
+
+7. Profile System
+- Balance display
+- Username display
+- Achievements
+- Streaks
+- Statistics
+
+8. Database Integrity
+- User balances
+- Referral records
+- Mining records
+- Task records
+- No data corruption
+
+9. API Endpoints
+- Test every endpoint
+- Verify response data
+- Verify validation
+- Verify error handling
+
+10. Frontend
+- Navigation
+- Mobile responsiveness
+- Loading states
+- Error states
+- UI consistency
+
+Requirements:
+
+- Produce a detailed audit report first.
+- List every bug found.
+- Rank bugs by severity.
+- Explain root cause of each bug.
+- Do NOT fix anything until the report is complete.
+
+After the report:
+
+Fix bugs one by one in order of severity.
+
+After each fix:
+- Run tests.
+- Verify nothing else broke.
+- Produce a verification report.
+
+Important:
+Do NOT redesign the app.
+Do NOT change tokenomics.
+Do NOT change rewards.
+Do NOT change mining logic unless it is broken.
+Do NOT remove existing features.
+
+Goal:
+Make the current HustleCoin system stable and fully functional while preserving all existing user data.

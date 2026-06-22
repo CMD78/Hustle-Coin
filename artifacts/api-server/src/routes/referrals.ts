@@ -32,7 +32,7 @@ router.get("/referrals", async (req, res): Promise<void> => {
     GetReferralsResponse.parse({
       telegramId,
       referralCode: telegramId,
-      referralLink: `https://t.me/HustleCoinMinerBot?start=${telegramId}`,
+      referralLink: `https://t.me/${process.env.BOT_USERNAME ?? "HustleCoinMinerBot"}?start=${telegramId}`,
       totalReferrals: refs.length,
       totalEarned: refs.reduce((sum, r) => sum + r.referrerHpEarned, 0),
       referrals: referralList,

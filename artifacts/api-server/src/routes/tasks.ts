@@ -72,6 +72,35 @@ router.post("/tasks/:taskId/complete", async (req, res): Promise<void> => {
   res.json(CompleteTaskResponse.parse({ id: completion.id, taskId: completion.taskId, telegramId: completion.telegramId, approved: !!completion.approved, completedAt: completion.completedAt.toISOString() }));
 });
 
+router.get("/admin/task-completions", async (req, res): Promise<void> => {
+  const adminId = String(req.query.telegramId ?? "");
+  if (adminId !== ADMIN_TELEGRAM_ID) { res.status(403).json({ error: "Forbidden" }); return; }
+
+  const completions = await db.select().from(taskCompletionsTable);
+  const tasks = await db.select().from(tasksTable);
+  const users = await db.select().from(usersTable);
+  const taskMap = new Map(tasks.map(t => [t.id, t]));
+  const userMap = new Map(users.map(u => [u.telegramId, u]));
+
+  const result = completions.map(c => {
+    const task = taskMap.get(c.taskId);
+    const user = userMap.get(c.telegramId);
+    return {
+      id: c.id,
+      taskId: c.taskId,
+      taskTitle: task?.title ?? "Unknown",
+      taskReward: task?.reward ?? 0,
+      telegramId: c.telegramId,
+      username: user?.username ?? null,
+      firstName: user?.firstName ?? "Unknown",
+      approved: !!c.approved,
+      completedAt: c.completedAt.toISOString(),
+    };
+  }).sort((a, b) => Number(a.approved) - Number(b.approved));
+
+  res.json(result);
+});
+
 router.post("/admin/tasks", async (req, res): Promise<void> => {
   const parsed = CreateTaskBody.safeParse(req.body);
   if (!parsed.success) {
@@ -143,11 +172,17 @@ router.post("/admin/tasks/:taskId/approve", async (req, res): Promise<void> => {
     return;
   }
 
-  const [completion] = await db.update(taskCompletionsTable).set({ approved: 1 }).where(and(eq(taskCompletionsTable.taskId, taskId), eq(taskCompletionsTable.telegramId, telegramId))).returning();
-  if (!completion) {
+  const [existingCompletion] = await db.select().from(taskCompletionsTable).where(and(eq(taskCompletionsTable.taskId, taskId), eq(taskCompletionsTable.telegramId, telegramId)));
+  if (!existingCompletion) {
     res.status(404).json({ error: "Completion not found" });
     return;
   }
+  if (existingCompletion.approved) {
+    res.status(400).json({ error: "Task completion already approved — reward already granted" });
+    return;
+  }
+
+  const [completion] = await db.update(taskCompletionsTable).set({ approved: 1 }).where(and(eq(taskCompletionsTable.taskId, taskId), eq(taskCompletionsTable.telegramId, telegramId))).returning();
 
   const [user] = await db.select().from(usersTable).where(eq(usersTable.telegramId, telegramId));
   if (user) {

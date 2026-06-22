@@ -306,7 +306,8 @@ export const GetAdminStatsResponse = zod.object({
   "averageHp": zod.number(),
   "totalReferrals": zod.number(),
   "totalAchievements": zod.number(),
-  "totalMines": zod.number()
+  "totalMines": zod.number(),
+  "totalCoins": zod.number()
 })
 
 

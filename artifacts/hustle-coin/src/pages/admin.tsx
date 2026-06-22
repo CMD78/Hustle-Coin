@@ -9,6 +9,101 @@ import { useToast } from "@/hooks/use-toast";
 
 const ADMIN_ID = "7035629762";
 
+interface TaskCompletion {
+  id: number;
+  taskId: number;
+  taskTitle: string;
+  taskReward: number;
+  telegramId: string;
+  username: string | null;
+  firstName: string;
+  approved: boolean;
+  completedAt: string;
+}
+
+function TaskCompletions({ telegramId }: { telegramId: string }) {
+  const [completions, setCompletions] = useState<TaskCompletion[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [approving, setApproving] = useState<number | null>(null);
+  const { toast } = useToast();
+
+  const load = () => {
+    setLoading(true);
+    fetch(`/api/admin/task-completions?telegramId=${encodeURIComponent(telegramId)}`)
+      .then(r => r.json()).then(setCompletions).catch(() => {}).finally(() => setLoading(false));
+  };
+
+  useEffect(() => { load(); }, [telegramId]);
+
+  const handleApprove = async (taskId: number, userTelegramId: string, reward: number) => {
+    setApproving(taskId);
+    try {
+      const r = await fetch(`/api/admin/tasks/${taskId}/approve`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ adminTelegramId: telegramId, telegramId: userTelegramId }),
+      });
+      const data = await r.json();
+      if (!r.ok) { toast({ title: "Error", description: data.error, variant: "destructive" }); return; }
+      toast({ title: "Approved!", description: `+${reward} HC granted to ${userTelegramId}` });
+      load();
+    } finally {
+      setApproving(null);
+    }
+  };
+
+  const pending = completions.filter(c => !c.approved);
+  const approved = completions.filter(c => c.approved);
+
+  return (
+    <div className="bg-card border border-border rounded-2xl p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <h3 className="font-bold text-sm">Task Submissions</h3>
+        <div className="flex items-center gap-2">
+          {pending.length > 0 && <span className="text-xs bg-amber-500/20 text-amber-400 font-bold px-2 py-0.5 rounded-full">{pending.length} pending</span>}
+          <button onClick={load} className="p-1.5 hover:bg-muted rounded-lg"><RefreshCw className="w-3.5 h-3.5 text-muted-foreground" /></button>
+        </div>
+      </div>
+      {loading ? (
+        <div className="flex justify-center py-6"><div className="w-5 h-5 border-2 border-primary border-t-transparent rounded-full animate-spin" /></div>
+      ) : completions.length === 0 ? (
+        <p className="text-center text-muted-foreground text-sm py-6">No task submissions yet</p>
+      ) : (
+        <div className="space-y-2 max-h-80 overflow-y-auto">
+          {pending.map(c => (
+            <div key={c.id} className="flex items-center gap-2 bg-muted/50 border border-amber-500/20 rounded-xl p-2.5">
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-semibold truncate">{c.taskTitle} <span className="text-amber-400">+{c.taskReward} HC</span></p>
+                <p className="text-[10px] text-muted-foreground">{c.firstName}{c.username ? ` @${c.username}` : ""} · {new Date(c.completedAt).toLocaleDateString()}</p>
+              </div>
+              <button
+                onClick={() => handleApprove(c.taskId, c.telegramId, c.taskReward)}
+                disabled={approving === c.taskId}
+                className="shrink-0 px-3 py-1.5 bg-green-500/20 text-green-400 border border-green-500/30 rounded-lg text-xs font-bold hover:bg-green-500/30 transition-colors disabled:opacity-50"
+              >
+                {approving === c.taskId ? "..." : "Approve"}
+              </button>
+            </div>
+          ))}
+          {approved.length > 0 && (
+            <details className="text-xs text-muted-foreground cursor-pointer">
+              <summary className="py-1 select-none">{approved.length} already approved</summary>
+              <div className="space-y-1 mt-1">
+                {approved.map(c => (
+                  <div key={c.id} className="flex items-center gap-2 bg-muted/30 rounded-xl p-2">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-green-400 shrink-0" />
+                    <span className="truncate">{c.taskTitle} · {c.firstName}</span>
+                  </div>
+                ))}
+              </div>
+            </details>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 type Tab = "dashboard" | "users" | "tasks" | "broadcast" | "recent" | "telegram" | "announce" | "deploy";
 
 interface Announcement {
@@ -343,17 +438,20 @@ export default function Admin() {
       )}
 
       {tab === "tasks" && (
-        <div className="bg-card border border-border rounded-2xl p-4 space-y-3">
-          <h3 className="font-bold text-sm flex items-center gap-2"><Plus className="w-4 h-4" /> Create Task</h3>
-          <input value={newTask.title} onChange={e => setNewTask({ ...newTask, title: e.target.value })} placeholder="Task title" className="w-full bg-muted border border-border rounded-xl px-3 py-2 text-sm" />
-          <input value={newTask.description} onChange={e => setNewTask({ ...newTask, description: e.target.value })} placeholder="Description" className="w-full bg-muted border border-border rounded-xl px-3 py-2 text-sm" />
-          <div className="flex gap-2">
-            <input value={newTask.reward} onChange={e => setNewTask({ ...newTask, reward: e.target.value })} placeholder="HC Reward" type="number" className="flex-1 bg-muted border border-border rounded-xl px-3 py-2 text-sm" />
-            <input value={newTask.link} onChange={e => setNewTask({ ...newTask, link: e.target.value })} placeholder="Link (optional)" className="flex-1 bg-muted border border-border rounded-xl px-3 py-2 text-sm" />
+        <div className="space-y-4">
+          <TaskCompletions telegramId={telegramId} />
+          <div className="bg-card border border-border rounded-2xl p-4 space-y-3">
+            <h3 className="font-bold text-sm flex items-center gap-2"><Plus className="w-4 h-4" /> Create Task</h3>
+            <input value={newTask.title} onChange={e => setNewTask({ ...newTask, title: e.target.value })} placeholder="Task title" className="w-full bg-muted border border-border rounded-xl px-3 py-2 text-sm" />
+            <input value={newTask.description} onChange={e => setNewTask({ ...newTask, description: e.target.value })} placeholder="Description" className="w-full bg-muted border border-border rounded-xl px-3 py-2 text-sm" />
+            <div className="flex gap-2">
+              <input value={newTask.reward} onChange={e => setNewTask({ ...newTask, reward: e.target.value })} placeholder="HC Reward" type="number" className="flex-1 bg-muted border border-border rounded-xl px-3 py-2 text-sm" />
+              <input value={newTask.link} onChange={e => setNewTask({ ...newTask, link: e.target.value })} placeholder="Link (optional)" className="flex-1 bg-muted border border-border rounded-xl px-3 py-2 text-sm" />
+            </div>
+            <button onClick={handleCreateTask} disabled={createTask.isPending} className="w-full py-2.5 bg-primary text-primary-foreground rounded-xl font-bold text-sm hover:bg-primary/90 transition-colors">
+              Create Task
+            </button>
           </div>
-          <button onClick={handleCreateTask} disabled={createTask.isPending} className="w-full py-2.5 bg-primary text-primary-foreground rounded-xl font-bold text-sm hover:bg-primary/90 transition-colors">
-            Create Task
-          </button>
         </div>
       )}
 
