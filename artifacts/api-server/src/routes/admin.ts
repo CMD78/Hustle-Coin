@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
-import { db, usersTable, referralsTable, achievementUnlocksTable, miningLogsTable, adminLogsTable, feedbackTable } from "@workspace/db";
-import { eq, gte, ilike, or, desc, sql } from "drizzle-orm";
+import { db, usersTable, referralsTable, achievementUnlocksTable, miningLogsTable, adminLogsTable, feedbackTable, taskCompletionsTable, tasksTable } from "@workspace/db";
+import { eq, gte, ilike, or, desc, sql, and } from "drizzle-orm";
 import {
   GetAdminStatsQueryParams, GetAdminStatsResponse,
   GetAdminUsersQueryParams, GetAdminUsersResponse,
@@ -37,8 +37,21 @@ router.get("/admin/stats", async (req, res): Promise<void> => {
   const totalMines = (await db.select().from(miningLogsTable)).length;
   const totalCoins = allUsers.reduce((s, u) => s + u.balance, 0);
 
+  const pendingTaskRows = await db
+    .select()
+    .from(taskCompletionsTable)
+    .where(eq(taskCompletionsTable.approved, 0));
+  const pendingTasks = pendingTaskRows.length;
+
+  const approvedTaskRows = await db
+    .select({ reward: tasksTable.reward })
+    .from(taskCompletionsTable)
+    .innerJoin(tasksTable, eq(taskCompletionsTable.taskId, tasksTable.id))
+    .where(eq(taskCompletionsTable.approved, 1));
+  const taskRewardsOut = approvedTaskRows.reduce((s, r) => s + (r.reward ?? 0), 0);
+
   res.json(
-    GetAdminStatsResponse.parse({ totalUsers, newUsersToday, newUsersThisWeek, activeUsersToday, activeUsersThisWeek, averageHp, totalReferrals, totalAchievements, totalMines, totalCoins })
+    GetAdminStatsResponse.parse({ totalUsers, newUsersToday, newUsersThisWeek, activeUsersToday, activeUsersThisWeek, averageHp, totalReferrals, totalAchievements, totalMines, totalCoins, pendingTasks, taskRewardsOut })
   );
 });
 

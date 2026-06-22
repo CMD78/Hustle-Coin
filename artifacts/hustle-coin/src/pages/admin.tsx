@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { useTelegram } from "@/lib/telegram";
 import { useGetAdminStats, useGetAdminUsers, useGrantHp, useCreateTask, useBroadcastMessage, useGetAdminFeedback } from "@workspace/api-client-react";
 import { motion } from "framer-motion";
-import { Users, Coins, Pickaxe, TrendingUp, Search, Ban, CheckCircle2, Plus, Send, Lock, RefreshCw, Shield, Zap, Download, Bot, Megaphone, Trash2, Pin, Settings } from "lucide-react";
+import { Users, Coins, Pickaxe, TrendingUp, Search, Ban, CheckCircle2, Plus, Send, Lock, RefreshCw, Shield, Zap, Download, Bot, Megaphone, Trash2, Pin, Settings, Clock, Gift } from "lucide-react";
 import { Link } from "wouter";
 import { useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/hooks/use-toast";
@@ -348,10 +348,12 @@ export default function Admin() {
             {[
               { icon: <Users className="w-4 h-4" />, label: "Total Users", value: stats.totalUsers, color: "text-blue-400" },
               { icon: <TrendingUp className="w-4 h-4" />, label: "New Today", value: stats.newUsersToday, color: "text-green-400" },
-              { icon: <Coins className="w-4 h-4" />, label: "Total HC", value: (stats as any).totalCoins ?? 0, color: "text-primary" },
+              { icon: <Coins className="w-4 h-4" />, label: "Total HC", value: stats.totalCoins ?? 0, color: "text-primary" },
               { icon: <Pickaxe className="w-4 h-4" />, label: "Total Mines", value: stats.totalMines, color: "text-amber-400" },
               { icon: <Users className="w-4 h-4" />, label: "Referrals", value: stats.totalReferrals, color: "text-purple-400" },
               { icon: <Zap className="w-4 h-4" />, label: "Active Today", value: stats.activeUsersToday, color: "text-secondary" },
+              { icon: <Clock className="w-4 h-4" />, label: "Pending Tasks", value: stats.pendingTasks ?? 0, color: "text-yellow-400" },
+              { icon: <Gift className="w-4 h-4" />, label: "Task Rewards Out", value: stats.taskRewardsOut ?? 0, color: "text-pink-400" },
             ].map((s, i) => (
               <motion.div key={i} initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} transition={{ delay: i * 0.05 }}
                 className="bg-card border border-border rounded-2xl p-3 text-center"

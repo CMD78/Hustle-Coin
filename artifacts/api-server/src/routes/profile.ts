@@ -1,6 +1,6 @@
 import { Router, type IRouter } from "express";
-import { db, usersTable, referralsTable, achievementUnlocksTable } from "@workspace/db";
-import { eq, sql } from "drizzle-orm";
+import { db, usersTable, referralsTable, achievementUnlocksTable, miningLogsTable } from "@workspace/db";
+import { eq, sql, sum } from "drizzle-orm";
 import { GetProfileQueryParams, GetProfileResponse } from "@workspace/api-zod";
 import { getLevel, getBadges, getMineCountdown, canMine, ADMIN_TELEGRAM_ID } from "../lib/hustlecoin";
 
@@ -29,6 +29,11 @@ router.get("/profile", async (req, res): Promise<void> => {
   const rankResult = await db.execute(sql`SELECT COUNT(*) + 1 as rank FROM ${usersTable} WHERE balance > ${user.balance}`);
   const rank = parseInt(String((rankResult.rows[0] as { rank: string }).rank), 10);
 
+  const hpMinedResult = await db.execute(
+    sql`SELECT COALESCE(SUM(hp_earned + bonus_hp), 0) as total FROM mining_logs WHERE telegram_id = ${telegramId}`
+  );
+  const totalHpMined = parseInt(String((hpMinedResult.rows[0] as { total: string }).total ?? "0"), 10);
+
   res.json(
     GetProfileResponse.parse({
       id: user.id,
@@ -40,6 +45,7 @@ router.get("/profile", async (req, res): Promise<void> => {
       level: getLevel(user.balance),
       streak: user.streak,
       totalMines: user.totalMines,
+      totalHpMined,
       lastMine: user.lastMine?.toISOString() ?? null,
       canMine: canMine(user.lastMine),
       mineCountdown,

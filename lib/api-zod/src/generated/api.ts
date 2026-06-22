@@ -66,6 +66,7 @@ export const GetProfileResponse = zod.object({
   "level": zod.number(),
   "streak": zod.number(),
   "totalMines": zod.number(),
+  "totalHpMined": zod.number().optional(),
   "lastMine": zod.string().nullish(),
   "canMine": zod.boolean().optional(),
   "mineCountdown": zod.number().nullish(),
@@ -307,7 +308,9 @@ export const GetAdminStatsResponse = zod.object({
   "totalReferrals": zod.number(),
   "totalAchievements": zod.number(),
   "totalMines": zod.number(),
-  "totalCoins": zod.number()
+  "totalCoins": zod.number(),
+  "pendingTasks": zod.number(),
+  "taskRewardsOut": zod.number()
 })
 
 
