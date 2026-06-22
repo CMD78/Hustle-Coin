@@ -131,6 +131,7 @@ export const GetTasksResponseItem = zod.object({
   "reward": zod.number(),
   "link": zod.string().nullish(),
   "status": zod.enum(['active', 'inactive']),
+  "taskType": zod.enum(['automatic', 'manual']),
   "completed": zod.boolean(),
   "approved": zod.boolean(),
   "completedAt": zod.string().nullish()
@@ -154,7 +155,9 @@ export const CompleteTaskResponse = zod.object({
   "taskId": zod.number(),
   "telegramId": zod.string(),
   "approved": zod.boolean(),
-  "completedAt": zod.string()
+  "completedAt": zod.string(),
+  "instantReward": zod.number().optional(),
+  "newBalance": zod.number().optional()
 })
 
 
@@ -310,7 +313,9 @@ export const GetAdminStatsResponse = zod.object({
   "totalMines": zod.number(),
   "totalCoins": zod.number(),
   "pendingTasks": zod.number(),
-  "taskRewardsOut": zod.number()
+  "taskRewardsOut": zod.number(),
+  "automaticTasksCount": zod.number(),
+  "manualTasksCount": zod.number()
 })
 
 
@@ -411,6 +416,7 @@ export const CreateTaskBody = zod.object({
   "description": zod.string(),
   "reward": zod.number(),
   "link": zod.string().nullish(),
+  "taskType": zod.enum(['automatic', 'manual']).optional(),
   "adminTelegramId": zod.string()
 })
 
@@ -428,6 +434,7 @@ export const UpdateTaskBody = zod.object({
   "reward": zod.number().optional(),
   "link": zod.string().nullish(),
   "status": zod.enum(['active', 'inactive']).optional(),
+  "taskType": zod.enum(['automatic', 'manual']).optional(),
   "adminTelegramId": zod.string().optional()
 })
 
@@ -438,6 +445,7 @@ export const UpdateTaskResponse = zod.object({
   "reward": zod.number(),
   "link": zod.string().nullish(),
   "status": zod.enum(['active', 'inactive']),
+  "taskType": zod.enum(['automatic', 'manual']),
   "createdAt": zod.string().optional()
 })
 

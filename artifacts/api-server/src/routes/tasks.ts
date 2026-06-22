@@ -34,6 +34,7 @@ router.get("/tasks", async (req, res): Promise<void> => {
           reward: t.reward,
           link: t.link ?? null,
           status: t.status as "active" | "inactive",
+          taskType: (t.taskType === "automatic" ? "automatic" : "manual") as "automatic" | "manual",
           completed: !!c,
           approved: c ? !!c.approved : false,
           completedAt: c?.completedAt.toISOString() ?? null,
@@ -60,16 +61,60 @@ router.post("/tasks/:taskId/complete", async (req, res): Promise<void> => {
   const { telegramId } = body.data;
   const { taskId } = params.data;
 
-  const [existing] = await db.select().from(taskCompletionsTable).where(and(eq(taskCompletionsTable.taskId, taskId), eq(taskCompletionsTable.telegramId, telegramId)));
+  const [existing] = await db.select().from(taskCompletionsTable).where(
+    and(eq(taskCompletionsTable.taskId, taskId), eq(taskCompletionsTable.telegramId, telegramId))
+  );
   if (existing) {
     res.status(400).json({ error: "Task already completed" });
     return;
   }
 
-  const [completion] = await db.insert(taskCompletionsTable).values({ taskId, telegramId, approved: 0 }).returning();
-  await updateQuestProgress(telegramId, "complete_task");
+  const [task] = await db.select().from(tasksTable).where(eq(tasksTable.id, taskId));
+  if (!task) {
+    res.status(404).json({ error: "Task not found" });
+    return;
+  }
 
-  res.json(CompleteTaskResponse.parse({ id: completion.id, taskId: completion.taskId, telegramId: completion.telegramId, approved: !!completion.approved, completedAt: completion.completedAt.toISOString() }));
+  const isAutomatic = task.taskType === "automatic";
+
+  if (isAutomatic) {
+    const [completion] = await db.insert(taskCompletionsTable)
+      .values({ taskId, telegramId, approved: 1 })
+      .returning();
+
+    const [user] = await db.select().from(usersTable).where(eq(usersTable.telegramId, telegramId));
+    let newBalance = user?.balance ?? 0;
+    if (user) {
+      newBalance = user.balance + task.reward;
+      await db.update(usersTable).set({ balance: newBalance }).where(eq(usersTable.telegramId, telegramId));
+    }
+
+    await updateQuestProgress(telegramId, "complete_task");
+
+    res.json(CompleteTaskResponse.parse({
+      id: completion.id,
+      taskId: completion.taskId,
+      telegramId: completion.telegramId,
+      approved: true,
+      completedAt: completion.completedAt.toISOString(),
+      instantReward: task.reward,
+      newBalance,
+    }));
+  } else {
+    const [completion] = await db.insert(taskCompletionsTable)
+      .values({ taskId, telegramId, approved: 0 })
+      .returning();
+
+    await updateQuestProgress(telegramId, "complete_task");
+
+    res.json(CompleteTaskResponse.parse({
+      id: completion.id,
+      taskId: completion.taskId,
+      telegramId: completion.telegramId,
+      approved: false,
+      completedAt: completion.completedAt.toISOString(),
+    }));
+  }
 });
 
 router.get("/admin/task-completions", async (req, res): Promise<void> => {
@@ -90,6 +135,7 @@ router.get("/admin/task-completions", async (req, res): Promise<void> => {
       taskId: c.taskId,
       taskTitle: task?.title ?? "Unknown",
       taskReward: task?.reward ?? 0,
+      taskType: task?.taskType ?? "manual",
       telegramId: c.telegramId,
       username: user?.username ?? null,
       firstName: user?.firstName ?? "Unknown",
@@ -113,8 +159,25 @@ router.post("/admin/tasks", async (req, res): Promise<void> => {
     return;
   }
 
-  const [task] = await db.insert(tasksTable).values({ title: parsed.data.title, description: parsed.data.description, reward: parsed.data.reward, link: parsed.data.link ?? null }).returning();
-  res.status(201).json({ id: task.id, title: task.title, description: task.description, reward: task.reward, link: task.link ?? null, status: task.status, createdAt: task.createdAt.toISOString() });
+  const taskType = parsed.data.taskType ?? "manual";
+  const [task] = await db.insert(tasksTable).values({
+    title: parsed.data.title,
+    description: parsed.data.description,
+    reward: parsed.data.reward,
+    link: parsed.data.link ?? null,
+    taskType,
+  }).returning();
+
+  res.status(201).json({
+    id: task.id,
+    title: task.title,
+    description: task.description,
+    reward: task.reward,
+    link: task.link ?? null,
+    status: task.status,
+    taskType: task.taskType,
+    createdAt: task.createdAt.toISOString(),
+  });
 });
 
 router.patch("/admin/tasks/:taskId", async (req, res): Promise<void> => {
@@ -143,7 +206,16 @@ router.patch("/admin/tasks/:taskId", async (req, res): Promise<void> => {
     return;
   }
 
-  res.json(UpdateTaskResponse.parse({ id: task.id, title: task.title, description: task.description, reward: task.reward, link: task.link ?? null, status: task.status as "active" | "inactive", createdAt: task.createdAt.toISOString() }));
+  res.json(UpdateTaskResponse.parse({
+    id: task.id,
+    title: task.title,
+    description: task.description,
+    reward: task.reward,
+    link: task.link ?? null,
+    status: task.status as "active" | "inactive",
+    taskType: (task.taskType === "automatic" ? "automatic" : "manual") as "automatic" | "manual",
+    createdAt: task.createdAt.toISOString(),
+  }));
 });
 
 router.post("/admin/tasks/:taskId/approve", async (req, res): Promise<void> => {
@@ -172,7 +244,9 @@ router.post("/admin/tasks/:taskId/approve", async (req, res): Promise<void> => {
     return;
   }
 
-  const [existingCompletion] = await db.select().from(taskCompletionsTable).where(and(eq(taskCompletionsTable.taskId, taskId), eq(taskCompletionsTable.telegramId, telegramId)));
+  const [existingCompletion] = await db.select().from(taskCompletionsTable).where(
+    and(eq(taskCompletionsTable.taskId, taskId), eq(taskCompletionsTable.telegramId, telegramId))
+  );
   if (!existingCompletion) {
     res.status(404).json({ error: "Completion not found" });
     return;
@@ -182,14 +256,22 @@ router.post("/admin/tasks/:taskId/approve", async (req, res): Promise<void> => {
     return;
   }
 
-  const [completion] = await db.update(taskCompletionsTable).set({ approved: 1 }).where(and(eq(taskCompletionsTable.taskId, taskId), eq(taskCompletionsTable.telegramId, telegramId))).returning();
+  const [completion] = await db.update(taskCompletionsTable).set({ approved: 1 }).where(
+    and(eq(taskCompletionsTable.taskId, taskId), eq(taskCompletionsTable.telegramId, telegramId))
+  ).returning();
 
   const [user] = await db.select().from(usersTable).where(eq(usersTable.telegramId, telegramId));
   if (user) {
     await db.update(usersTable).set({ balance: user.balance + task.reward }).where(eq(usersTable.telegramId, telegramId));
   }
 
-  res.json(ApproveTaskCompletionResponse.parse({ id: completion.id, taskId: completion.taskId, telegramId: completion.telegramId, approved: !!completion.approved, completedAt: completion.completedAt.toISOString() }));
+  res.json(ApproveTaskCompletionResponse.parse({
+    id: completion.id,
+    taskId: completion.taskId,
+    telegramId: completion.telegramId,
+    approved: !!completion.approved,
+    completedAt: completion.completedAt.toISOString(),
+  }));
 });
 
 export default router;

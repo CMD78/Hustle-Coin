@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useTelegram } from "@/lib/telegram";
-import { useGetAdminStats, useGetAdminUsers, useGrantHp, useCreateTask, useBroadcastMessage, useGetAdminFeedback } from "@workspace/api-client-react";
+import { useGetAdminStats, useGetAdminUsers, useGrantHp, useCreateTask, useUpdateTask, useBroadcastMessage, useGetAdminFeedback, useGetTasks } from "@workspace/api-client-react";
 import { motion } from "framer-motion";
 import { Users, Coins, Pickaxe, TrendingUp, Search, Ban, CheckCircle2, Plus, Send, Lock, RefreshCw, Shield, Zap, Download, Bot, Megaphone, Trash2, Pin, Settings, Clock, Gift } from "lucide-react";
 import { Link } from "wouter";
@@ -14,11 +14,88 @@ interface TaskCompletion {
   taskId: number;
   taskTitle: string;
   taskReward: number;
+  taskType?: string;
   telegramId: string;
   username: string | null;
   firstName: string;
   approved: boolean;
   completedAt: string;
+}
+
+function ExistingTasksList({ telegramId }: { telegramId: string }) {
+  const updateTask = useUpdateTask();
+  const queryClient = useQueryClient();
+  const { toast } = useToast();
+  const { data: tasks, isLoading, refetch } = useGetTasks(
+    { telegramId },
+    { query: { enabled: !!telegramId } as any }
+  );
+
+  const toggleType = (taskId: number, currentType: string) => {
+    const newType = currentType === "automatic" ? "manual" : "automatic";
+    updateTask.mutate(
+      { taskId, data: { taskType: newType as "automatic" | "manual", adminTelegramId: ADMIN_ID } },
+      {
+        onSuccess: () => {
+          toast({ title: `Task set to ${newType}`, description: newType === "automatic" ? "Rewards granted instantly." : "Requires manual approval." });
+          refetch();
+        },
+        onError: () => toast({ title: "Error updating task", variant: "destructive" }),
+      }
+    );
+  };
+
+  const toggleStatus = (taskId: number, currentStatus: string) => {
+    const newStatus = currentStatus === "active" ? "inactive" : "active";
+    updateTask.mutate(
+      { taskId, data: { status: newStatus as "active" | "inactive", adminTelegramId: ADMIN_ID } },
+      {
+        onSuccess: () => { toast({ title: `Task ${newStatus}` }); refetch(); },
+        onError: () => toast({ title: "Error updating task", variant: "destructive" }),
+      }
+    );
+  };
+
+  if (isLoading) return <div className="bg-card border border-border rounded-2xl p-4 text-center text-sm text-muted-foreground">Loading tasks...</div>;
+
+  const all = tasks ?? [];
+  return (
+    <div className="bg-card border border-border rounded-2xl p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <h3 className="font-bold text-sm">Existing Tasks ({all.length})</h3>
+        <button onClick={() => refetch()} className="p-1.5 hover:bg-muted rounded-lg"><RefreshCw className="w-3.5 h-3.5 text-muted-foreground" /></button>
+      </div>
+      {all.length === 0 ? (
+        <p className="text-center text-muted-foreground text-sm py-4">No tasks yet</p>
+      ) : (
+        <div className="space-y-2 max-h-64 overflow-y-auto">
+          {all.map(t => (
+            <div key={t.id} className={`flex items-center gap-2 rounded-xl p-2.5 border ${t.status === "inactive" ? "opacity-50 border-border" : t.taskType === "automatic" ? "border-green-500/20 bg-green-500/5" : "border-border bg-muted/30"}`}>
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-semibold truncate">{t.title}</p>
+                <p className="text-[10px] text-muted-foreground">+{t.reward} HC · {t.taskType === "automatic" ? "⚡ Instant" : "🔒 Manual"}</p>
+              </div>
+              <button
+                onClick={() => toggleType(t.id, t.taskType)}
+                disabled={updateTask.isPending}
+                title={`Switch to ${t.taskType === "automatic" ? "manual" : "automatic"}`}
+                className={`shrink-0 px-2 py-1 rounded-lg text-[10px] font-bold border transition-all ${t.taskType === "automatic" ? "bg-green-500/20 text-green-400 border-green-500/30 hover:bg-green-500/30" : "bg-muted text-muted-foreground border-border hover:border-primary/50"}`}
+              >
+                {t.taskType === "automatic" ? "⚡ Auto" : "🔒 Manual"}
+              </button>
+              <button
+                onClick={() => toggleStatus(t.id, t.status)}
+                disabled={updateTask.isPending}
+                className={`shrink-0 px-2 py-1 rounded-lg text-[10px] font-bold border transition-all ${t.status === "active" ? "bg-red-500/10 text-red-400 border-red-500/20 hover:bg-red-500/20" : "bg-green-500/10 text-green-400 border-green-500/20 hover:bg-green-500/20"}`}
+              >
+                {t.status === "active" ? "Deactivate" : "Activate"}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function TaskCompletions({ telegramId }: { telegramId: string }) {
@@ -127,7 +204,7 @@ export default function Admin() {
   const [grantAmount, setGrantAmount] = useState("");
   const [grantReason, setGrantReason] = useState("");
   const [broadcastMsg, setBroadcastMsg] = useState("");
-  const [newTask, setNewTask] = useState({ title: "", description: "", reward: "", link: "" });
+  const [newTask, setNewTask] = useState({ title: "", description: "", reward: "", link: "", taskType: "manual" as "automatic" | "manual" });
   const [deployResults, setDeployResults] = useState<Record<string, { status: string; detail: string }> | null>(null);
   const [deployLoading, setDeployLoading] = useState(false);
   const [searchResults, setSearchResults] = useState<any[] | null>(null);
@@ -210,8 +287,8 @@ export default function Admin() {
   const handleCreateTask = () => {
     if (!newTask.title || !newTask.reward) return;
     createTask.mutate(
-      { data: { title: newTask.title, description: newTask.description, reward: parseInt(newTask.reward), link: newTask.link || null, adminTelegramId: telegramId } },
-      { onSuccess: () => { toast({ title: "Task created!" }); setNewTask({ title: "", description: "", reward: "", link: "" }); } }
+      { data: { title: newTask.title, description: newTask.description, reward: parseInt(newTask.reward), link: newTask.link || null, taskType: newTask.taskType, adminTelegramId: telegramId } },
+      { onSuccess: () => { toast({ title: "Task created!", description: `Created as ${newTask.taskType} task.` }); setNewTask({ title: "", description: "", reward: "", link: "", taskType: "manual" }); } }
     );
   };
 
@@ -354,6 +431,8 @@ export default function Admin() {
               { icon: <Zap className="w-4 h-4" />, label: "Active Today", value: stats.activeUsersToday, color: "text-secondary" },
               { icon: <Clock className="w-4 h-4" />, label: "Pending Tasks", value: stats.pendingTasks ?? 0, color: "text-yellow-400" },
               { icon: <Gift className="w-4 h-4" />, label: "Task Rewards Out", value: stats.taskRewardsOut ?? 0, color: "text-pink-400" },
+              { icon: <Zap className="w-4 h-4" />, label: "Auto Tasks", value: stats.automaticTasksCount ?? 0, color: "text-green-400" },
+              { icon: <Settings className="w-4 h-4" />, label: "Manual Tasks", value: stats.manualTasksCount ?? 0, color: "text-blue-300" },
             ].map((s, i) => (
               <motion.div key={i} initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} transition={{ delay: i * 0.05 }}
                 className="bg-card border border-border rounded-2xl p-3 text-center"
@@ -442,6 +521,7 @@ export default function Admin() {
       {tab === "tasks" && (
         <div className="space-y-4">
           <TaskCompletions telegramId={telegramId} />
+          <ExistingTasksList telegramId={telegramId} />
           <div className="bg-card border border-border rounded-2xl p-4 space-y-3">
             <h3 className="font-bold text-sm flex items-center gap-2"><Plus className="w-4 h-4" /> Create Task</h3>
             <input value={newTask.title} onChange={e => setNewTask({ ...newTask, title: e.target.value })} placeholder="Task title" className="w-full bg-muted border border-border rounded-xl px-3 py-2 text-sm" />
@@ -450,6 +530,23 @@ export default function Admin() {
               <input value={newTask.reward} onChange={e => setNewTask({ ...newTask, reward: e.target.value })} placeholder="HC Reward" type="number" className="flex-1 bg-muted border border-border rounded-xl px-3 py-2 text-sm" />
               <input value={newTask.link} onChange={e => setNewTask({ ...newTask, link: e.target.value })} placeholder="Link (optional)" className="flex-1 bg-muted border border-border rounded-xl px-3 py-2 text-sm" />
             </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setNewTask({ ...newTask, taskType: "manual" })}
+                className={`flex-1 py-2 rounded-xl text-xs font-bold border transition-all ${newTask.taskType === "manual" ? "bg-muted border-primary text-foreground" : "border-border text-muted-foreground hover:border-primary/50"}`}
+              >
+                🔒 Manual Approval
+              </button>
+              <button
+                onClick={() => setNewTask({ ...newTask, taskType: "automatic" })}
+                className={`flex-1 py-2 rounded-xl text-xs font-bold border transition-all ${newTask.taskType === "automatic" ? "bg-green-500/20 border-green-500 text-green-400" : "border-border text-muted-foreground hover:border-green-500/50"}`}
+              >
+                ⚡ Instant Reward
+              </button>
+            </div>
+            <p className="text-[10px] text-muted-foreground">
+              {newTask.taskType === "automatic" ? "Users receive HC immediately upon completion — no approval needed." : "Users submit for review. You approve and reward manually."}
+            </p>
             <button onClick={handleCreateTask} disabled={createTask.isPending} className="w-full py-2.5 bg-primary text-primary-foreground rounded-xl font-bold text-sm hover:bg-primary/90 transition-colors">
               Create Task
             </button>

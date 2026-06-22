@@ -9,6 +9,7 @@ export const tasksTable = pgTable("tasks", {
   reward: integer("reward").notNull().default(50),
   link: text("link"),
   status: text("status").notNull().default("active"),
+  taskType: text("task_type").notNull().default("manual"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });
 

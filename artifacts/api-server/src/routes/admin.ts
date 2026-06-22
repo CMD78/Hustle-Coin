@@ -50,8 +50,12 @@ router.get("/admin/stats", async (req, res): Promise<void> => {
     .where(eq(taskCompletionsTable.approved, 1));
   const taskRewardsOut = approvedTaskRows.reduce((s, r) => s + (r.reward ?? 0), 0);
 
+  const allTasks = await db.select().from(tasksTable).where(eq(tasksTable.status, "active"));
+  const automaticTasksCount = allTasks.filter(t => t.taskType === "automatic").length;
+  const manualTasksCount = allTasks.filter(t => t.taskType !== "automatic").length;
+
   res.json(
-    GetAdminStatsResponse.parse({ totalUsers, newUsersToday, newUsersThisWeek, activeUsersToday, activeUsersThisWeek, averageHp, totalReferrals, totalAchievements, totalMines, totalCoins, pendingTasks, taskRewardsOut })
+    GetAdminStatsResponse.parse({ totalUsers, newUsersToday, newUsersThisWeek, activeUsersToday, activeUsersThisWeek, averageHp, totalReferrals, totalAchievements, totalMines, totalCoins, pendingTasks, taskRewardsOut, automaticTasksCount, manualTasksCount })
   );
 });
 
