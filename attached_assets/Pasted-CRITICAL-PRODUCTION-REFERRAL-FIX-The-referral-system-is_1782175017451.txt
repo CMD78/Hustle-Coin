@@ -1,0 +1,115 @@
+CRITICAL PRODUCTION REFERRAL FIX
+
+The referral system is still broken in production.
+
+Symptoms:
+- Referral rewards are not credited.
+- Referral count does not increase.
+- Real users are joining through referral links but no referral is recorded.
+
+Your mission:
+
+1. Investigate the ENTIRE referral flow.
+2. Identify the exact root cause.
+3. Implement the complete fix.
+4. Test the fix using real end-to-end scenarios.
+5. Produce a final verification report.
+
+Investigation Checklist:
+
+A. Telegram Configuration
+- Check Telegram bot setup.
+- Check webhook configuration.
+- Check Mini App configuration.
+- Check BotFather settings.
+- Check menu button setup.
+- Check referral link format.
+- Check start, startapp, and start_param handling.
+
+B. Frontend
+- telegram.tsx
+- referral page
+- referral link generation
+- localStorage handling
+- referredBy persistence
+- start_param extraction
+- app launch flow
+
+C. Backend
+- init.ts
+- referralClaim.ts
+- referral routes
+- users table
+- referrals table
+- reward logic
+- referral count logic
+- duplicate prevention
+- self-referral prevention
+
+D. Database
+- Verify referral rows are created.
+- Verify balances update.
+- Verify counts update.
+- Verify existing user data remains intact.
+
+Required Outcome:
+
+For a brand-new user:
+
+1. User clicks referral link.
+2. Referrer ID is preserved.
+3. User opens Mini App.
+4. Referral row is created.
+5. Referrer reward is credited.
+6. Referee reward is credited.
+7. Referral count increases.
+8. Duplicate claims are blocked.
+9. Self-referrals are blocked.
+
+Testing Requirements:
+
+Run and document:
+
+TEST 1:
+- New user joins through referral.
+- Verify referral row.
+- Verify balances.
+- Verify count.
+
+TEST 2:
+- Existing user attempts referral.
+- Verify behavior.
+
+TEST 3:
+- Duplicate referral.
+- Verify blocked.
+
+TEST 4:
+- Self-referral.
+- Verify blocked.
+
+TEST 5:
+- Multiple real referrals.
+- Verify counts update correctly.
+
+Important Rules:
+
+- Do NOT modify mining.
+- Do NOT modify task system.
+- Do NOT modify admin panel except referral-related stats if required.
+- Do NOT redesign UI.
+- Do NOT change tokenomics.
+- Preserve all existing users and balances.
+
+When complete:
+
+Provide:
+1. Root cause report.
+2. Files changed.
+3. Fix summary.
+4. Test results.
+5. Final PASS/FAIL verification.
+
+Do not stop after investigation.
+Do not ask for confirmation.
+Investigate, implement, test, and verify completely.

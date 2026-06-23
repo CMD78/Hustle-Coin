@@ -16,6 +16,8 @@ interface TelegramContextValue {
 
 const TelegramContext = createContext<TelegramContextValue | undefined>(undefined);
 
+const PENDING_REFERRAL_KEY = "hc_pending_referral";
+
 export function TelegramProvider({ children }: { children: ReactNode }) {
   const [telegramId, setTelegramId] = useState<string>(
     localStorage.getItem("telegramId") || "123456789"
@@ -34,7 +36,6 @@ export function TelegramProvider({ children }: { children: ReactNode }) {
 
     const tgUser = tg?.initDataUnsafe?.user;
     
-    // Dev mock fallback
     const devUser = {
       id: 123456789,
       first_name: "Dev",
@@ -48,31 +49,69 @@ export function TelegramProvider({ children }: { children: ReactNode }) {
     setTelegramId(currentTelegramId);
     localStorage.setItem("telegramId", currentTelegramId);
 
-    // DEBUG: report what Telegram SDK returned so admin tab issue can be diagnosed
     console.log("[TelegramProvider] tg object present:", !!tg);
-    console.log("[TelegramProvider] tg.initDataUnsafe.user:", tg?.initDataUnsafe?.user ?? "undefined — no Telegram session (browser/dev)");
+    console.log("[TelegramProvider] tg.initDataUnsafe:", JSON.stringify(tg?.initDataUnsafe ?? {}));
     console.log("[TelegramProvider] telegramId resolved to:", currentTelegramId);
-    console.log("[TelegramProvider] isAdmin:", currentTelegramId === "7035629762");
 
-    // Telegram passes the bot start param via initDataUnsafe.start_param,
-    // NOT via window.location.search — check SDK first, then fall back to URL
+    // Resolve the referrer ID using all possible sources, in priority order:
+    // 1. tg.initDataUnsafe.start_param — set when app opened via direct Mini App link (?startapp=)
+    // 2. ?ref= URL param — set by webhook reply button (our primary referral mechanism)
+    // 3. ?startapp= URL param — fallback for direct app link format
+    // 4. ?start= URL param — old fallback
+    // 5. localStorage — persisted from a previous page load so reloads don't lose the referrer
     const params = new URLSearchParams(window.location.search);
+    const startParam = tg?.initDataUnsafe?.start_param ?? null;
+    const refParam = params.get("ref");
+    const startAppParam = params.get("startapp");
+    const startQueryParam = params.get("start");
+    const storedReferral = localStorage.getItem(PENDING_REFERRAL_KEY);
+
     const referredBy =
-      tg?.initDataUnsafe?.start_param ||
-      params.get("startapp") ||
-      params.get("start") ||
+      startParam ||
+      refParam ||
+      startAppParam ||
+      startQueryParam ||
+      storedReferral ||
       undefined;
 
-    initUser.mutate({
-      data: {
-        telegramId: currentTelegramId,
-        username: currentUser.username || "user",
-        firstName: currentUser.first_name,
-        lastName: currentUser.last_name,
-        referredBy,
-        initData: tg?.initData
-      }
+    console.log("[TelegramProvider] referral sources:", {
+      start_param: startParam,
+      ref_param: refParam,
+      startapp_param: startAppParam,
+      start_param_url: startQueryParam,
+      stored_referral: storedReferral,
+      resolved: referredBy ?? "none",
     });
+
+    // Persist the referral to localStorage so it survives reloads before init fires
+    if (referredBy && referredBy !== currentTelegramId) {
+      localStorage.setItem(PENDING_REFERRAL_KEY, referredBy);
+      console.log("[TelegramProvider] persisted referral to localStorage:", referredBy);
+    }
+
+    initUser.mutate(
+      {
+        data: {
+          telegramId: currentTelegramId,
+          username: currentUser.username || "user",
+          firstName: currentUser.first_name,
+          lastName: currentUser.last_name,
+          // Only send referredBy if it's truthy and not a self-referral
+          referredBy: referredBy && referredBy !== currentTelegramId ? referredBy : undefined,
+          initData: tg?.initData,
+        },
+      },
+      {
+        onSuccess: () => {
+          // Clear stored referral after a successful init — whether it was used or not
+          localStorage.removeItem(PENDING_REFERRAL_KEY);
+          console.log("[TelegramProvider] init succeeded, cleared pending referral");
+        },
+        onError: () => {
+          console.warn("[TelegramProvider] init failed — keeping pending referral for retry");
+        },
+      }
+    );
   }, []);
 
   return (
