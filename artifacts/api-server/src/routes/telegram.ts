@@ -1,7 +1,7 @@
 import { Router, type IRouter } from "express";
 import { db, usersTable, miningLogsTable, referralsTable, tasksTable, questsTable, achievementsTable, achievementUnlocksTable, taskCompletionsTable, questProgressTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
-import { ADMIN_TELEGRAM_ID, REFERRER_REWARD, REFEREE_REWARD, WELCOME_BONUS, getLevel, getBadges, getMineCountdown, canMine, updateQuestProgress, checkAndUnlockAchievements } from "../lib/hustlecoin";
+import { ADMIN_TELEGRAM_ID, REFERRER_REWARD, REFEREE_REWARD, WELCOME_BONUS, getLevel, getBadges, getMineCountdown, canMine, processReferral } from "../lib/hustlecoin";
 import crypto from "crypto";
 
 const router: IRouter = Router();
@@ -40,41 +40,6 @@ async function sendTelegramMessage(botToken: string, chatId: number | string, te
   });
 }
 
-async function processReferral(
-  telegramId: string,
-  referredBy: string,
-  log: (obj: object, msg: string) => void
-): Promise<void> {
-  if (!referredBy || referredBy === telegramId) return;
-
-  const [existing] = await db.select().from(referralsTable).where(eq(referralsTable.refereeTelegramId, telegramId));
-  if (existing) {
-    log({ telegramId, referredBy }, "[REFERRAL] skipped — referral row already exists");
-    return;
-  }
-
-  const [referrer] = await db.select().from(usersTable).where(eq(usersTable.telegramId, referredBy));
-  if (!referrer) {
-    log({ telegramId, referredBy }, "[REFERRAL] skipped — referrer not found in DB");
-    return;
-  }
-
-  await db.insert(referralsTable).values({
-    referrerTelegramId: referredBy,
-    refereeTelegramId: telegramId,
-    referrerHpEarned: REFERRER_REWARD,
-    refereeHpEarned: REFEREE_REWARD,
-  });
-  await db.update(usersTable).set({ balance: referrer.balance + REFERRER_REWARD }).where(eq(usersTable.telegramId, referredBy));
-  await db.update(usersTable).set({ balance: (await db.select().from(usersTable).where(eq(usersTable.telegramId, telegramId))).at(0)?.balance ?? REFEREE_REWARD + REFEREE_REWARD }).where(eq(usersTable.telegramId, telegramId));
-  await updateQuestProgress(referredBy, "invite_friend");
-
-  const newReferralCount = (await db.select().from(referralsTable).where(eq(referralsTable.referrerTelegramId, referredBy))).length;
-  await checkAndUnlockAchievements(referredBy, referrer.balance + REFERRER_REWARD, referrer.streak, referrer.totalMines, newReferralCount, null);
-
-  log({ telegramId, referredBy, referrerReward: REFERRER_REWARD, refereeReward: REFEREE_REWARD }, "[REFERRAL] ✅ referral recorded and rewards credited");
-}
-
 // ── Telegram Bot Webhook ─────────────────────────────────────────────────────
 // Register this URL with BotFather: POST WEBAPP_URL/api/webhook
 // Set webhook: GET /api/admin/register-webhook?telegramId=ADMIN_ID
@@ -103,11 +68,15 @@ router.post("/webhook", async (req, res): Promise<void> => {
       const parts = text.trim().split(/\s+/);
       const startParam = parts[1] ?? null; // This is the referrer's telegramId
       const userId = String(from.id);
-      const username = from.username ?? null;
-      const firstName = from.first_name ?? "User";
+      // Bug #2 fix: Telegram users are not required to have a @username.
+      // Default to empty string to satisfy the DB notNull() constraint.
+      const username = from.username || "";
+      const firstName = from.first_name || "User";
       const lastName = from.last_name ?? null;
 
       req.log?.info({ userId, startParam, username }, "[WEBHOOK] /start command received");
+
+      const hasValidRef = !!(startParam && startParam !== userId);
 
       // Create or fetch user
       let [user] = await db.select().from(usersTable).where(eq(usersTable.telegramId, userId));
@@ -115,42 +84,38 @@ router.post("/webhook", async (req, res): Promise<void> => {
 
       if (!user) {
         const isAdmin = userId === ADMIN_TELEGRAM_ID;
+        // Bug #2 fix: username defaults to "" so notNull() is never violated.
+        // Bug #3 fix: write referredBy into the user row at creation time.
         [user] = await db.insert(usersTable).values({
-          telegramId: userId, username, firstName, lastName, isAdmin, balance: 0
+          telegramId: userId,
+          username,
+          firstName,
+          lastName,
+          isAdmin,
+          balance: 0,
+          referredBy: hasValidRef ? startParam : null,
         }).returning();
         req.log?.info({ userId }, "[WEBHOOK] new user created");
       } else {
-        // Update profile info
-        await db.update(usersTable).set({ username, firstName, lastName, lastActive: new Date() }).where(eq(usersTable.telegramId, userId));
+        await db.update(usersTable).set({ username: username || user.username, firstName, lastName, lastActive: new Date() }).where(eq(usersTable.telegramId, userId));
       }
 
-      // Process referral if present and this is a new user
-      const hasValidRef = startParam && startParam !== userId;
+      // Process referral using the centralized function (Bug #1/4 fix)
       if (isNewUser && hasValidRef) {
-        // Check for existing referral first
-        const [existingRef] = await db.select().from(referralsTable).where(eq(referralsTable.refereeTelegramId, userId));
-        if (!existingRef) {
-          const [referrer] = await db.select().from(usersTable).where(eq(usersTable.telegramId, startParam));
-          if (referrer) {
-            await db.insert(referralsTable).values({
-              referrerTelegramId: startParam,
-              refereeTelegramId: userId,
-              referrerHpEarned: REFERRER_REWARD,
-              refereeHpEarned: REFEREE_REWARD,
-            });
-            await db.update(usersTable).set({ balance: referrer.balance + REFERRER_REWARD }).where(eq(usersTable.telegramId, startParam));
-            await db.update(usersTable).set({ balance: REFEREE_REWARD }).where(eq(usersTable.telegramId, userId));
-            await updateQuestProgress(startParam, "invite_friend");
-            const refCount = (await db.select().from(referralsTable).where(eq(referralsTable.referrerTelegramId, startParam))).length;
-            await checkAndUnlockAchievements(startParam, referrer.balance + REFERRER_REWARD, referrer.streak, referrer.totalMines, refCount, null);
-            req.log?.info({ userId, startParam }, "[WEBHOOK] ✅ referral recorded at webhook level");
-          } else {
-            // Grant welcome bonus since referrer not found
-            await db.update(usersTable).set({ balance: WELCOME_BONUS }).where(eq(usersTable.telegramId, userId));
-          }
+        const result = await processReferral(userId, startParam!, 0);
+
+        if (result.credited) {
+          req.log?.info({ userId, startParam }, "[WEBHOOK] ✅ referral credited via processReferral");
+        } else if (result.reason === "referrer_not_found") {
+          // Grant welcome bonus since referrer not in DB
+          await db.update(usersTable).set({ balance: WELCOME_BONUS }).where(eq(usersTable.telegramId, userId));
+          req.log?.info({ userId, startParam }, "[WEBHOOK] referrer not found — welcome bonus granted");
+        } else {
+          req.log?.info({ userId, startParam, reason: result.reason }, "[WEBHOOK] referral skipped");
         }
       } else if (isNewUser && !hasValidRef) {
         await db.update(usersTable).set({ balance: WELCOME_BONUS }).where(eq(usersTable.telegramId, userId));
+        req.log?.info({ userId }, "[WEBHOOK] new user without referral — welcome bonus granted");
       }
 
       // Build the Mini App button URL — embeds the referrer ID so the frontend
@@ -251,33 +216,36 @@ router.post("/telegram/start", async (req, res): Promise<void> => {
     initDataValid = verifyTelegramInitData(String(initData), botToken);
   }
 
-  const referredBy = startParameter ?? null;
+  const referredBy = startParameter ? String(startParameter) : null;
+  const safeUsername = (username as string | undefined) || "";
 
   let [user] = await db.select().from(usersTable).where(eq(usersTable.telegramId, String(telegramId)));
   const isNewUser = !user;
 
   if (!user) {
     const isAdmin = String(telegramId) === ADMIN_TELEGRAM_ID;
+    // Bug #2 fix: username defaults to "" so notNull() is never violated.
+    // Bug #3 fix: write referredBy into the user row at creation time.
     [user] = await db
       .insert(usersTable)
-      .values({ telegramId: String(telegramId), username: username ?? null, firstName: firstName ?? "User", lastName: lastName ?? null, isAdmin, balance: 0 })
+      .values({
+        telegramId: String(telegramId),
+        username: safeUsername,
+        firstName: (firstName as string | undefined) || "User",
+        lastName: (lastName as string | undefined) ?? null,
+        isAdmin,
+        balance: 0,
+        referredBy: referredBy && referredBy !== String(telegramId) ? referredBy : null,
+      })
       .returning();
 
-    if (referredBy && String(referredBy) !== String(telegramId)) {
-      const [referrer] = await db.select().from(usersTable).where(eq(usersTable.telegramId, String(referredBy)));
-      if (referrer) {
-        const [existing] = await db.select().from(referralsTable).where(eq(referralsTable.refereeTelegramId, String(telegramId)));
-        if (!existing) {
-          await db.insert(referralsTable).values({
-            referrerTelegramId: String(referredBy),
-            refereeTelegramId: String(telegramId),
-            referrerHpEarned: REFERRER_REWARD,
-            refereeHpEarned: REFEREE_REWARD,
-          });
-          await db.update(usersTable).set({ balance: referrer.balance + REFERRER_REWARD }).where(eq(usersTable.telegramId, String(referredBy)));
-          await db.update(usersTable).set({ balance: REFEREE_REWARD }).where(eq(usersTable.telegramId, String(telegramId)));
-          [user] = await db.select().from(usersTable).where(eq(usersTable.telegramId, String(telegramId)));
-        }
+    if (referredBy && referredBy !== String(telegramId)) {
+      const result = await processReferral(String(telegramId), referredBy, 0);
+      if (result.reason === "referrer_not_found") {
+        await db.update(usersTable).set({ balance: WELCOME_BONUS }).where(eq(usersTable.telegramId, String(telegramId)));
+      }
+      if (result.credited) {
+        [user] = await db.select().from(usersTable).where(eq(usersTable.telegramId, String(telegramId)));
       }
     } else {
       await db.update(usersTable).set({ balance: WELCOME_BONUS }).where(eq(usersTable.telegramId, String(telegramId)));
@@ -285,7 +253,7 @@ router.post("/telegram/start", async (req, res): Promise<void> => {
     }
   } else {
     if (user.isBanned) { res.status(403).json({ error: "Account is banned" }); return; }
-    await db.update(usersTable).set({ username: username ?? user.username, firstName: firstName ?? user.firstName, lastActive: new Date() }).where(eq(usersTable.telegramId, String(telegramId)));
+    await db.update(usersTable).set({ username: safeUsername || user.username, firstName: (firstName as string | undefined) || user.firstName, lastActive: new Date() }).where(eq(usersTable.telegramId, String(telegramId)));
     [user] = await db.select().from(usersTable).where(eq(usersTable.telegramId, String(telegramId)));
   }
 

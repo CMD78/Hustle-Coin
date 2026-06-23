@@ -2,7 +2,7 @@ import { Router, type IRouter } from "express";
 import { db, usersTable, referralsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { InitUserBody, InitUserResponse } from "@workspace/api-zod";
-import { getLevel, getBadges, getMineCountdown, canMine, checkAndUnlockAchievements, updateQuestProgress, ADMIN_TELEGRAM_ID, REFERRER_REWARD, REFEREE_REWARD, WELCOME_BONUS } from "../lib/hustlecoin";
+import { getLevel, getBadges, getMineCountdown, canMine, checkAndUnlockAchievements, ADMIN_TELEGRAM_ID, WELCOME_BONUS, processReferral } from "../lib/hustlecoin";
 
 const router: IRouter = Router();
 
@@ -48,64 +48,35 @@ router.post("/init", async (req, res): Promise<void> => {
   if (!user) {
     // ── NEW USER ─────────────────────────────────────────────────────────────
     const isAdmin = telegramId === ADMIN_TELEGRAM_ID;
+    // Bug #3 fix: write referredBy into the users row at creation time
     [user] = await db
       .insert(usersTable)
-      .values({ telegramId, username, firstName, lastName: lastName ?? null, isAdmin, balance: 0 })
+      .values({
+        telegramId,
+        username: username || "user",
+        firstName,
+        lastName: lastName ?? null,
+        isAdmin,
+        balance: 0,
+        referredBy: referredBy && referredBy !== telegramId ? referredBy : null,
+      })
       .returning();
 
     if (referredBy && referredBy !== telegramId) {
-      req.log.info({ telegramId, referredBy }, "[REFERRAL_DEBUG] new user — entering referral branch");
+      req.log.info({ telegramId, referredBy }, "[REFERRAL_DEBUG] new user — calling processReferral");
 
-      const [referrer] = await db.select().from(usersTable).where(eq(usersTable.telegramId, referredBy));
+      const result = await processReferral(telegramId, referredBy, 0);
 
-      req.log.info({
-        debug_referrer_lookup: {
-          referredBy,
-          referrer_found: !!referrer,
-          referrer_balance: referrer?.balance ?? null,
-        }
-      }, "[REFERRAL_DEBUG] referrer lookup result");
-
-      if (referrer) {
-        const [existing] = await db.select().from(referralsTable).where(eq(referralsTable.refereeTelegramId, telegramId));
-
-        if (!existing) {
-          await db.insert(referralsTable).values({
-            referrerTelegramId: referredBy,
-            refereeTelegramId: telegramId,
-            referrerHpEarned: REFERRER_REWARD,
-            refereeHpEarned: REFEREE_REWARD,
-          });
-          await db.update(usersTable).set({ balance: referrer.balance + REFERRER_REWARD }).where(eq(usersTable.telegramId, referredBy));
-          await db.update(usersTable).set({ balance: REFEREE_REWARD }).where(eq(usersTable.telegramId, telegramId));
-          [user] = await db.select().from(usersTable).where(eq(usersTable.telegramId, telegramId));
-          await updateQuestProgress(referredBy, "invite_friend");
-          await checkAndUnlockAchievements(
-            referredBy,
-            referrer.balance + REFERRER_REWARD,
-            referrer.streak,
-            referrer.totalMines,
-            (await db.select().from(referralsTable).where(eq(referralsTable.referrerTelegramId, referredBy))).length,
-            null
-          );
-
-          req.log.info({
-            debug_referral_credited: {
-              referredBy,
-              telegramId,
-              referrer_reward: REFERRER_REWARD,
-              referee_reward: REFEREE_REWARD,
-              referrer_new_balance: referrer.balance + REFERRER_REWARD,
-              referee_new_balance: REFEREE_REWARD,
-            }
-          }, "[REFERRAL_DEBUG] ✅ new user referral rewards CREDITED successfully");
-
-        } else {
-          req.log.info({ telegramId, referredBy, reason: "duplicate_row_exists" }, "[REFERRAL_DEBUG] ⚠️ referral skipped — duplicate row");
-        }
+      if (result.credited) {
+        // Re-fetch user to get updated balance after reward
+        [user] = await db.select().from(usersTable).where(eq(usersTable.telegramId, telegramId));
+        req.log.info({ telegramId, referredBy }, "[REFERRAL_DEBUG] ✅ new user referral credited via processReferral");
       } else {
-        // Referrer not found — give welcome bonus instead
-        req.log.info({ telegramId, referredBy, reason: "referrer_not_found_in_db" }, "[REFERRAL_DEBUG] ⚠️ referral skipped — referrer not found");
+        req.log.info(
+          { telegramId, referredBy, reason: result.reason },
+          "[REFERRAL_DEBUG] referral not credited — granting welcome bonus"
+        );
+        // Referrer not found or other skip — fall back to welcome bonus
         await db.update(usersTable).set({ balance: WELCOME_BONUS }).where(eq(usersTable.telegramId, telegramId));
         [user] = await db.select().from(usersTable).where(eq(usersTable.telegramId, telegramId));
       }
@@ -132,7 +103,7 @@ router.post("/init", async (req, res): Promise<void> => {
       return;
     }
 
-    await db.update(usersTable).set({ username, firstName, lastName: lastName ?? null, lastActive: new Date() }).where(eq(usersTable.telegramId, telegramId));
+    await db.update(usersTable).set({ username: username || user.username, firstName, lastName: lastName ?? null, lastActive: new Date() }).where(eq(usersTable.telegramId, telegramId));
     [user] = await db.select().from(usersTable).where(eq(usersTable.telegramId, telegramId));
 
     // SAFETY NET: If referredBy was provided for an existing user, check whether
@@ -143,31 +114,19 @@ router.post("/init", async (req, res): Promise<void> => {
       if (!existingRef) {
         req.log.info({ telegramId, referredBy }, "[REFERRAL_DEBUG] existing user without referral row — attempting second-pass referral");
 
-        const [referrer] = await db.select().from(usersTable).where(eq(usersTable.telegramId, referredBy));
-        if (referrer && user.balance <= WELCOME_BONUS) {
-          // Only credit if user balance suggests they haven't been rewarded yet
-          await db.insert(referralsTable).values({
-            referrerTelegramId: referredBy,
-            refereeTelegramId: telegramId,
-            referrerHpEarned: REFERRER_REWARD,
-            refereeHpEarned: REFEREE_REWARD,
-          });
-          await db.update(usersTable).set({ balance: referrer.balance + REFERRER_REWARD }).where(eq(usersTable.telegramId, referredBy));
-          await db.update(usersTable).set({ balance: user.balance + REFEREE_REWARD }).where(eq(usersTable.telegramId, telegramId));
-          [user] = await db.select().from(usersTable).where(eq(usersTable.telegramId, telegramId));
-          await updateQuestProgress(referredBy, "invite_friend");
+        // Bug #4 fix: remove the flawed balance-based guard entirely.
+        // processReferral's own duplicate-row check (existingRef guard) is the
+        // correct and sufficient protection against double-credits.
+        const result = await processReferral(telegramId, referredBy, user.balance);
 
-          req.log.info({
-            telegramId, referredBy,
-            referrer_reward: REFERRER_REWARD,
-            referee_bonus: REFEREE_REWARD,
-          }, "[REFERRAL_DEBUG] ✅ second-pass referral credited for existing user");
+        if (result.credited) {
+          [user] = await db.select().from(usersTable).where(eq(usersTable.telegramId, telegramId));
+          req.log.info({ telegramId, referredBy }, "[REFERRAL_DEBUG] ✅ second-pass referral credited");
         } else {
-          req.log.info({
-            telegramId, referredBy,
-            reason: !referrer ? "referrer_not_found" : "balance_too_high",
-            user_balance: user.balance,
-          }, "[REFERRAL_DEBUG] second-pass referral skipped");
+          req.log.info(
+            { telegramId, referredBy, reason: result.reason },
+            "[REFERRAL_DEBUG] second-pass referral skipped"
+          );
         }
       }
     }

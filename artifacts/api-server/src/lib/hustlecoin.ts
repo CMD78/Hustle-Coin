@@ -1,4 +1,4 @@
-import { db, usersTable, achievementsTable, achievementUnlocksTable, questProgressTable, questsTable } from "@workspace/db";
+import { db, usersTable, referralsTable, achievementsTable, achievementUnlocksTable, questProgressTable, questsTable } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { logger } from "./logger";
 
@@ -55,6 +55,116 @@ export function getBadges(user: { referralCount: number; streak: number; balance
   if (user.balance >= 25000) badges.push("👑 HC Whale");
   if (user.totalMines >= 30) badges.push("⛏️ Top Miner");
   return badges;
+}
+
+// ── Centralized Referral Processor ───────────────────────────────────────────
+// Single source of truth for all referral logic.
+// Called from /api/init (new-user branch), /api/init (second-pass branch),
+// and the Telegram webhook handler.
+//
+// Returns { credited: true } when rewards were issued, or
+//         { credited: false, reason } when skipped (with reason for logging).
+// ─────────────────────────────────────────────────────────────────────────────
+export async function processReferral(
+  refereeTelegramId: string,
+  referrerTelegramId: string,
+  refereeCurrentBalance: number
+): Promise<{ credited: boolean; reason?: string }> {
+  if (!referrerTelegramId || referrerTelegramId === refereeTelegramId) {
+    logger.info({ refereeTelegramId, referrerTelegramId }, "[REFERRAL] skipped — invalid or self-referral");
+    return { credited: false, reason: "invalid_or_self_referral" };
+  }
+
+  // Guard: no duplicate rows
+  const [existing] = await db
+    .select()
+    .from(referralsTable)
+    .where(eq(referralsTable.refereeTelegramId, refereeTelegramId));
+
+  if (existing) {
+    logger.info(
+      { refereeTelegramId, referrerTelegramId },
+      "[REFERRAL] skipped — referral row already exists"
+    );
+    return { credited: false, reason: "duplicate_row_exists" };
+  }
+
+  // Referrer must exist in DB
+  const [referrer] = await db
+    .select()
+    .from(usersTable)
+    .where(eq(usersTable.telegramId, referrerTelegramId));
+
+  if (!referrer) {
+    logger.info(
+      { refereeTelegramId, referrerTelegramId },
+      "[REFERRAL] skipped — referrer not found in DB"
+    );
+    return { credited: false, reason: "referrer_not_found" };
+  }
+
+  const referrerBalanceBefore = referrer.balance;
+  const refereeBalanceBefore = refereeCurrentBalance;
+  const referralCountBefore = (
+    await db
+      .select()
+      .from(referralsTable)
+      .where(eq(referralsTable.referrerTelegramId, referrerTelegramId))
+  ).length;
+
+  // Insert referral row
+  await db.insert(referralsTable).values({
+    referrerTelegramId,
+    refereeTelegramId,
+    referrerHpEarned: REFERRER_REWARD,
+    refereeHpEarned: REFEREE_REWARD,
+  });
+
+  // Credit referrer
+  const referrerBalanceAfter = referrerBalanceBefore + REFERRER_REWARD;
+  await db
+    .update(usersTable)
+    .set({ balance: referrerBalanceAfter })
+    .where(eq(usersTable.telegramId, referrerTelegramId));
+
+  // Credit referee
+  const refereeBalanceAfter = refereeBalanceBefore + REFEREE_REWARD;
+  await db
+    .update(usersTable)
+    .set({ balance: refereeBalanceAfter })
+    .where(eq(usersTable.telegramId, refereeTelegramId));
+
+  const referralCountAfter = referralCountBefore + 1;
+
+  logger.info(
+    {
+      referrer_id: referrerTelegramId,
+      referee_id: refereeTelegramId,
+      referral_row_inserted: true,
+      referrer_balance_before: referrerBalanceBefore,
+      referrer_balance_after: referrerBalanceAfter,
+      referee_balance_before: refereeBalanceBefore,
+      referee_balance_after: refereeBalanceAfter,
+      referral_count_before: referralCountBefore,
+      referral_count_after: referralCountAfter,
+      referrer_reward: REFERRER_REWARD,
+      referee_reward: REFEREE_REWARD,
+    },
+    "[REFERRAL] ✅ referral row created — balances updated — referral count increased"
+  );
+
+  // Side-effects: quest progress and achievements for referrer
+  await updateQuestProgress(referrerTelegramId, "invite_friend");
+  await checkAndUnlockAchievements(
+    referrerTelegramId,
+    referrerBalanceAfter,
+    referrer.streak,
+    referrer.totalMines,
+    referralCountAfter,
+    null
+  );
+
+  return { credited: true };
 }
 
 export async function checkAndUnlockAchievements(
