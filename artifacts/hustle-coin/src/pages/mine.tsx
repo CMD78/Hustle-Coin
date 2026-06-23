@@ -2,27 +2,39 @@ import { useState, useEffect } from "react";
 import { useTelegram } from "@/lib/telegram";
 import { useGetProfile, useMineHp } from "@workspace/api-client-react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Coins, Flame, Pickaxe } from "lucide-react";
+import { Coins, Flame, Pickaxe, Zap } from "lucide-react";
 import { useQueryClient } from "@tanstack/react-query";
 
-const MINE_COOLDOWN = 24 * 60 * 60; // 24 hours in seconds
+const MINE_COOLDOWN_SECS = 24 * 60 * 60;
 
-function CircularProgress({ progress, size = 280, strokeWidth = 8, children }: {
-  progress: number; // 0 to 1
+// ── Three distinct mining states ─────────────────────────────────────────────
+// "idle"   — no session has ever been started (lastMine = null)
+// "mining" — session is in progress, countdown > 0
+// "claim"  — 24 h elapsed, rewards are waiting to be claimed
+// ─────────────────────────────────────────────────────────────────────────────
+type MineState = "idle" | "mining" | "claim";
+
+function CircularProgress({
+  progress,
+  size = 280,
+  strokeWidth = 8,
+  children,
+}: {
+  progress: number;
   size?: number;
   strokeWidth?: number;
   children?: React.ReactNode;
 }) {
   const radius = (size - strokeWidth * 2) / 2;
   const circumference = 2 * Math.PI * radius;
-  const offset = circumference * (1 - progress);
+  const offset = circumference * (1 - Math.min(1, Math.max(0, progress)));
 
   return (
     <div className="relative" style={{ width: size, height: size }}>
       <svg
         width={size}
         height={size}
-        className="absolute inset-0 -rotate-90"
+        className="absolute inset-0"
         style={{ transform: "rotate(-90deg)" }}
       >
         <circle
@@ -63,9 +75,14 @@ export default function Mine() {
   );
 
   const mineHp = useMineHp();
-  const [floatingHp, setFloatingHp] = useState<{ id: number; hp: number; x: number; y: number }[]>([]);
+
+  // Fix #3: floating HP only rendered on confirmed server success (moved out of click handler)
+  const [floatingHp, setFloatingHp] = useState<{ id: number; hp: number }[]>([]);
+
+  // Local countdown seeded from server; ticks down with setTimeout
   const [countdown, setCountdown] = useState<number | null>(null);
 
+  // Seed countdown when profile arrives or refreshes
   useEffect(() => {
     if (profile?.mineCountdown && profile.mineCountdown > 0) {
       setCountdown(profile.mineCountdown);
@@ -74,137 +91,203 @@ export default function Mine() {
     }
   }, [profile?.mineCountdown]);
 
+  // Tick — uses setTimeout so we don't need to worry about stale closures
   useEffect(() => {
     if (countdown === null || countdown <= 0) return;
-    const interval = setInterval(() => {
-      setCountdown(prev => (prev !== null && prev > 0 ? prev - 1 : null));
+    const timer = setTimeout(() => {
+      setCountdown((c) => (c !== null && c > 0 ? c - 1 : 0));
     }, 1000);
-    return () => clearInterval(interval);
+    return () => clearTimeout(timer);
   }, [countdown]);
 
-  const handleMine = (e: React.MouseEvent | React.TouchEvent) => {
-    if (countdown !== null && countdown > 0) return;
-    if (!profile?.canMine) return;
+  // ── Derive state ────────────────────────────────────────────────────────────
+  const hasSession = !!profile?.lastMine;
+  const countdownActive = countdown !== null && countdown > 0;
 
-    let clientX, clientY;
-    if ("touches" in e) {
-      clientX = e.touches[0].clientX;
-      clientY = e.touches[0].clientY;
-    } else {
-      clientX = (e as React.MouseEvent).clientX;
-      clientY = (e as React.MouseEvent).clientY;
-    }
+  let mineState: MineState;
+  if (!hasSession) {
+    mineState = "idle";
+  } else if (countdownActive || profile?.canMine === false) {
+    mineState = "mining";
+  } else {
+    mineState = "claim";
+  }
 
-    const newId = Date.now();
-    setFloatingHp(prev => [...prev, { id: newId, hp: 100, x: clientX, y: clientY }]);
-    setTimeout(() => {
-      setFloatingHp(prev => prev.filter(f => f.id !== newId));
-    }, 1000);
+  // ── Progress ring ───────────────────────────────────────────────────────────
+  // 0 = session just started / not started; 1 = session complete / ready to claim
+  let ringProgress: number;
+  if (mineState === "idle") {
+    ringProgress = 0;
+  } else if (mineState === "claim") {
+    ringProgress = 1;
+  } else {
+    // filling as time elapses: 0 → 1 over MINE_COOLDOWN_SECS
+    ringProgress = countdown !== null
+      ? Math.max(0, (MINE_COOLDOWN_SECS - countdown) / MINE_COOLDOWN_SECS)
+      : 0;
+  }
 
-    if (navigator.vibrate) navigator.vibrate(50);
+  // ── Click handler ───────────────────────────────────────────────────────────
+  // Fix #1: only onClick — no onTouchStart (removes double-fire on mobile)
+  // Fix #3: floating HP moved to onSuccess
+  // Fix #2: isPending guard added
+  const handleAction = () => {
+    if (mineState === "mining") return;
+    if (mineHp.isPending) return;  // Fix #3: in-flight guard
 
-    mineHp.mutate({ data: { telegramId } }, {
-      onSuccess: (data) => {
-        if (data.nextMineAt) {
-          const next = new Date(data.nextMineAt).getTime();
-          const now = Date.now();
-          if (next > now) {
-            setCountdown(Math.floor((next - now) / 1000));
+    mineHp.mutate(
+      { data: { telegramId } },
+      {
+        onSuccess: (data: any) => {
+          if (!data.success) return;
+
+          // Fix #2: floating HP fires ONLY here, after server confirms
+          const totalHp = (data.hpEarned ?? 0) + (data.bonusHp ?? 0);
+          const id = Date.now();
+          setFloatingHp((prev) => [...prev, { id, hp: totalHp }]);
+          setTimeout(
+            () => setFloatingHp((prev) => prev.filter((f) => f.id !== id)),
+            1200
+          );
+
+          // Seed the new countdown from the server's nextMineAt
+          if (data.nextMineAt) {
+            const remaining = Math.floor(
+              (new Date(data.nextMineAt).getTime() - Date.now()) / 1000
+            );
+            setCountdown(remaining > 0 ? remaining : null);
           }
-        }
-        queryClient.setQueryData(
-          [`/api/profile`, { telegramId }],
-          (old: any) => old ? { ...old, balance: data.newBalance, streak: data.streak, canMine: false } : old
-        );
-        queryClient.invalidateQueries({ queryKey: [`/api/dashboard`, { telegramId }] });
-      },
-    });
+
+          queryClient.invalidateQueries({
+            queryKey: [`/api/profile`, { telegramId }],
+          });
+          queryClient.invalidateQueries({
+            queryKey: [`/api/dashboard`, { telegramId }],
+          });
+        },
+      }
+    );
   };
 
-  const formatTime = (seconds: number) => {
-    const h = Math.floor(seconds / 3600);
-    const m = Math.floor((seconds % 3600) / 60);
-    const s = seconds % 60;
-    if (h > 0) return `${h}h ${m}m`;
-    return `${m}m ${s}s`;
+  const formatTime = (secs: number) => {
+    const h = Math.floor(secs / 3600);
+    const m = Math.floor((secs % 3600) / 60);
+    const s = secs % 60;
+    if (h > 0) return `${h}h ${String(m).padStart(2, "0")}m`;
+    return `${m}m ${String(s).padStart(2, "0")}s`;
   };
-
-  const isCooling = countdown !== null && countdown > 0;
-  const progress = isCooling ? 1 - countdown / MINE_COOLDOWN : 1;
 
   return (
     <div className="flex flex-col items-center min-h-[80vh] relative animate-in fade-in duration-500 pt-4">
 
+      {/* Fix #2: floating HP anchored to center — appears only after server confirms */}
       <AnimatePresence>
-        {floatingHp.map(f => (
+        {floatingHp.map((f) => (
           <motion.div
             key={f.id}
-            initial={{ opacity: 1, y: 0, scale: 0.5 }}
-            animate={{ opacity: 0, y: -150, scale: 1.5 }}
+            initial={{ opacity: 1, y: 0, scale: 0.6 }}
+            animate={{ opacity: 0, y: -160, scale: 1.6 }}
             exit={{ opacity: 0 }}
-            transition={{ duration: 0.8, ease: "easeOut" }}
-            className="fixed z-50 text-3xl font-black text-primary pointer-events-none drop-shadow-md"
-            style={{ left: f.x - 20, top: f.y - 20 }}
+            transition={{ duration: 1.0, ease: "easeOut" }}
+            className="fixed z-50 text-3xl font-black text-primary pointer-events-none drop-shadow-lg"
+            style={{ left: "50%", top: "40%", transform: "translateX(-50%)" }}
           >
-            +{f.hp}
+            +{f.hp} HC
           </motion.div>
         ))}
       </AnimatePresence>
 
+      {/* Header + state badge */}
       <div className="mb-6 text-center">
         <h1 className="text-2xl font-black tracking-tight">Mining</h1>
         <div className="mt-2">
-          {isCooling ? (
+          {mineState === "mining" && (
             <span className="inline-flex items-center gap-1.5 bg-orange-500/15 border border-orange-500/30 text-orange-400 text-xs font-bold px-3 py-1 rounded-full">
               <span className="w-1.5 h-1.5 rounded-full bg-orange-400 animate-pulse" />
               Mining Active
             </span>
-          ) : (
+          )}
+          {mineState === "claim" && (
+            <span className="inline-flex items-center gap-1.5 bg-green-500/15 border border-green-500/30 text-green-400 text-xs font-bold px-3 py-1 rounded-full">
+              <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
+              Ready to Claim
+            </span>
+          )}
+          {mineState === "idle" && (
             <span className="inline-flex items-center gap-1.5 bg-primary/15 border border-primary/30 text-primary text-xs font-bold px-3 py-1 rounded-full">
-              <span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
-              Ready to Mine
+              <span className="w-1.5 h-1.5 rounded-full bg-primary" />
+              No Active Session
             </span>
           )}
         </div>
       </div>
 
-      <CircularProgress progress={isCooling ? 1 - progress : 1} size={280} strokeWidth={8}>
+      {/* Fix #6: ring fills 0→1 as session progresses (Pi Network style) */}
+      <CircularProgress progress={ringProgress} size={280} strokeWidth={8}>
         <motion.button
-          whileHover={!isCooling ? { scale: 1.05 } : {}}
-          whileTap={!isCooling ? { scale: 0.93 } : {}}
-          onClick={handleMine}
-          onTouchStart={handleMine}
-          disabled={isCooling || !profile?.canMine}
+          whileHover={mineState !== "mining" ? { scale: 1.05 } : {}}
+          whileTap={mineState !== "mining" ? { scale: 0.93 } : {}}
+          // Fix #1: only onClick — removed onTouchStart that caused double-fire on mobile
+          onClick={handleAction}
+          disabled={mineState === "mining" || mineHp.isPending}
           className={`w-56 h-56 rounded-full flex flex-col items-center justify-center shadow-2xl transition-all duration-300 relative border-4 overflow-hidden
-            ${isCooling
+            ${mineState === "mining"
               ? "bg-muted border-border cursor-not-allowed"
+              : mineState === "claim"
+              ? "bg-gradient-to-b from-green-500 to-emerald-600 border-green-400 cursor-pointer hover:shadow-[0_0_60px_rgba(34,197,94,0.45)]"
               : "bg-gradient-to-b from-yellow-500 to-amber-600 border-yellow-400 cursor-pointer hover:shadow-[0_0_60px_rgba(250,204,21,0.45)]"
             }`}
         >
-          {isCooling ? (
-            <>
-              <div className="text-center">
-                <p className="text-xs text-muted-foreground font-semibold mb-1 uppercase tracking-wider">Mining In Progress</p>
-                <p className="text-2xl font-black font-mono text-foreground">{formatTime(countdown!)}</p>
-                <p className="text-[10px] text-muted-foreground mt-1">Next session available</p>
-              </div>
-            </>
-          ) : (
+          {mineState === "mining" && (
+            <div className="text-center px-4">
+              <p className="text-[10px] text-muted-foreground font-semibold mb-1 uppercase tracking-wider">
+                Mining In Progress
+              </p>
+              <p className="text-2xl font-black font-mono text-foreground">
+                {countdown !== null ? formatTime(countdown) : "--:--"}
+              </p>
+              <p className="text-[10px] text-muted-foreground mt-1.5">
+                until claim available
+              </p>
+            </div>
+          )}
+
+          {/* Fix #5: "Start Mining" label for idle state */}
+          {mineState === "idle" && (
             <>
               <div className="absolute inset-0 bg-gradient-to-t from-black/40 to-transparent" />
-              <Coins className="w-20 h-20 text-white drop-shadow-lg mb-1 relative z-10" />
-              <span className="text-2xl font-black text-white drop-shadow-md relative z-10">MINE HC</span>
-              <span className="text-xs text-white/70 relative z-10 mt-0.5">Tap to earn</span>
+              <Pickaxe className="w-16 h-16 text-white drop-shadow-lg mb-1 relative z-10" />
+              <span className="text-xl font-black text-white drop-shadow-md relative z-10">
+                {mineHp.isPending ? "Starting…" : "Start Mining"}
+              </span>
+              <span className="text-xs text-white/70 relative z-10 mt-0.5">
+                24-hour session
+              </span>
+            </>
+          )}
+
+          {/* Fix #5: "Claim HC" label for claim state */}
+          {mineState === "claim" && (
+            <>
+              <div className="absolute inset-0 bg-gradient-to-t from-black/40 to-transparent" />
+              <Coins className="w-16 h-16 text-white drop-shadow-lg mb-1 relative z-10" />
+              <span className="text-xl font-black text-white drop-shadow-md relative z-10">
+                {mineHp.isPending ? "Claiming…" : "Claim HC"}
+              </span>
+              <span className="text-xs text-white/70 relative z-10 mt-0.5">
+                +100 HC + streak bonus
+              </span>
             </>
           )}
         </motion.button>
       </CircularProgress>
 
+      {/* Stats row */}
       <div className="mt-8 w-full max-w-xs grid grid-cols-3 gap-3">
         <div className="bg-card border border-border rounded-2xl p-3 text-center">
           <Pickaxe className="w-4 h-4 text-blue-400 mx-auto mb-1" />
           <div className="text-lg font-black text-blue-400">{profile?.totalMines ?? 0}</div>
-          <div className="text-[10px] text-muted-foreground">Total Sessions</div>
+          <div className="text-[10px] text-muted-foreground">Sessions</div>
         </div>
         <div className="bg-card border border-border rounded-2xl p-3 text-center">
           <Flame className="w-4 h-4 text-orange-400 mx-auto mb-1" />
@@ -212,16 +295,21 @@ export default function Mine() {
           <div className="text-[10px] text-muted-foreground">Day Streak</div>
         </div>
         <div className="bg-card border border-border rounded-2xl p-3 text-center">
-          <Coins className="w-4 h-4 text-primary mx-auto mb-1" />
-          <div className="text-lg font-black text-primary">{(profile?.totalHpMined ?? 0).toLocaleString()}</div>
+          <Zap className="w-4 h-4 text-primary mx-auto mb-1" />
+          <div className="text-lg font-black text-primary">
+            {(profile?.totalHpMined ?? 0).toLocaleString()}
+          </div>
           <div className="text-[10px] text-muted-foreground">HC Mined</div>
         </div>
       </div>
 
-      <p className="mt-6 text-muted-foreground text-xs max-w-[240px] text-center">
-        {isCooling
-          ? "24-hour mining session active. Return when the timer ends."
-          : "Tap the coin to start your 24-hour mining session."}
+      {/* Contextual description */}
+      <p className="mt-6 text-muted-foreground text-xs max-w-[240px] text-center leading-relaxed">
+        {mineState === "mining"
+          ? "Your 24-hour mining session is running. Come back when the timer ends to claim your HC."
+          : mineState === "claim"
+          ? "Session complete! Claim your HC to instantly start the next 24-hour session."
+          : "Start your first 24-hour mining session. You'll earn HC coins that you can claim when it completes."}
       </p>
     </div>
   );
