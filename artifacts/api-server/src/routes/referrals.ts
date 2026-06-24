@@ -28,11 +28,20 @@ router.get("/referrals", async (req, res): Promise<void> => {
     })
   );
 
+  const botUsername = process.env.BOT_USERNAME ?? "HustleCoinMinerBot";
+  const appShortname = process.env.APP_SHORTNAME ?? "HustleCoin";
+  // Use the Mini App direct-link format (?startapp=) so Telegram always injects
+  // start_param into tg.initDataUnsafe even when the user already has the bot open.
+  // Falls back to legacy ?start= format if shortname is explicitly cleared.
+  const referralLink = appShortname
+    ? `https://t.me/${botUsername}/${appShortname}?startapp=${telegramId}`
+    : `https://t.me/${botUsername}?start=${telegramId}`;
+
   res.json(
     GetReferralsResponse.parse({
       telegramId,
       referralCode: telegramId,
-      referralLink: `https://t.me/${process.env.BOT_USERNAME ?? "HustleCoinMinerBot"}?start=${telegramId}`,
+      referralLink,
       totalReferrals: refs.length,
       totalEarned: refs.reduce((sum, r) => sum + r.referrerHpEarned, 0),
       referrals: referralList,

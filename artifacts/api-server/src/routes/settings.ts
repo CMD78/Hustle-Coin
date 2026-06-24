@@ -12,6 +12,9 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   tiktok_url: "https://www.tiktok.com/@hustlecoin0",
   bot_username: "HustleCoinMinerBot",
   app_name: "HustleCoin",
+  // Mini App shortname registered in BotFather via /newapp.
+  // Used to generate t.me/BOT/SHORTNAME?startapp= referral links.
+  app_shortname: "HustleCoin",
   version: "Beta v1.0",
 };
 

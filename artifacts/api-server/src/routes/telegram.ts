@@ -118,10 +118,16 @@ router.post("/webhook", async (req, res): Promise<void> => {
         req.log?.info({ userId }, "[WEBHOOK] new user without referral — welcome bonus granted");
       }
 
-      // Build the Mini App button URL — embeds the referrer ID so the frontend
-      // can also claim via ?ref= param as a second-pass safety net
-      const webAppUrl = getWebAppUrl();
-      const buttonUrl = hasValidRef ? `${webAppUrl}?ref=${startParam}` : webAppUrl;
+      // Build the Mini App button URL.
+      // Use the ?startapp= direct Mini App link so Telegram injects start_param
+      // into tg.initDataUnsafe even when the user already has the bot chat open.
+      // ?ref= is kept as a URL-param safety net in case start_param is missed.
+      const botUsername = process.env.BOT_USERNAME ?? "HustleCoinMinerBot";
+      const appShortname = process.env.APP_SHORTNAME ?? "HustleCoin";
+      const baseDeepLink = `https://t.me/${botUsername}/${appShortname}`;
+      const buttonUrl = hasValidRef
+        ? `${baseDeepLink}?startapp=${startParam}`
+        : baseDeepLink;
 
       const isReferred = isNewUser && hasValidRef;
 
@@ -141,8 +147,10 @@ router.post("/webhook", async (req, res): Promise<void> => {
     // Handle /referral command — sends user their referral link
     if (text === "/referral" || text.startsWith("/referral@")) {
       const userId = String(from.id);
-      const botUsername = process.env.BOT_USERNAME ?? "HustleCoinMinerBot";
-      const referralLink = `https://t.me/${botUsername}?start=${userId}`;
+      const refBotUsername = process.env.BOT_USERNAME ?? "HustleCoinMinerBot";
+      const refAppShortname = process.env.APP_SHORTNAME ?? "HustleCoin";
+      // Use direct Mini App link so start_param is always injected by Telegram
+      const referralLink = `https://t.me/${refBotUsername}/${refAppShortname}?startapp=${userId}`;
       await sendTelegramMessage(botToken, chatId,
         `🔗 Your referral link:\n\n<code>${referralLink}</code>\n\nShare this link with friends! You earn <b>+${REFERRER_REWARD} HC</b> for each friend who joins, and they get <b>+${REFEREE_REWARD} HC</b> as a welcome bonus!`
       );
@@ -317,7 +325,7 @@ router.get("/telegram-status", async (req, res): Promise<void> => {
     miniAppUrl: botUsername ? `https://t.me/${botUsername}` : null,
     webAppUrl,
     webhookUrl: `${webAppUrl.replace(/\/hustle-coin.*$/, "")}/api/webhook`,
-    deepLinkExample: botUsername ? `https://t.me/${botUsername}?start=USER_ID` : null,
+    deepLinkExample: botUsername ? `https://t.me/${botUsername}/${process.env.APP_SHORTNAME ?? "HustleCoin"}?startapp=USER_ID` : null,
     hmacSupported: true,
     botCommands: [
       { command: "/start", description: "Start HustleCoin Mini App" },

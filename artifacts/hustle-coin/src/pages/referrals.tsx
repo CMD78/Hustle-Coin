@@ -80,7 +80,7 @@ export default function Referrals() {
         <div className="bg-card border border-border rounded-2xl p-4">
           <p className="text-xs text-muted-foreground mb-2 uppercase tracking-wider font-semibold">Your Referral Link</p>
           <div className="bg-muted rounded-xl px-3 py-2.5 text-xs font-mono text-muted-foreground truncate mb-3">
-            {referralData?.referralLink ?? `https://t.me/HustleCoinMinerBot?start=${telegramId}`}
+            {referralData?.referralLink ?? `https://t.me/HustleCoinMinerBot/HustleCoin?startapp=${telegramId}`}
           </div>
           <div className="grid grid-cols-2 gap-2">
             <button
