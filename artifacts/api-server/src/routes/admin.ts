@@ -125,6 +125,71 @@ router.get("/admin/users/search", async (req, res): Promise<void> => {
   res.json(result);
 });
 
+router.get("/admin/users/:targetId/details", async (req, res): Promise<void> => {
+  const adminId = String(req.query.telegramId ?? "");
+  const targetId = req.params.targetId;
+  if (!isAdmin(adminId)) { res.status(403).json({ error: "Forbidden" }); return; }
+
+  const [user] = await db.select().from(usersTable).where(eq(usersTable.telegramId, targetId));
+  if (!user) { res.status(404).json({ error: "User not found" }); return; }
+
+  const [referrals, achievementUnlocks] = await Promise.all([
+    db.select().from(referralsTable).where(eq(referralsTable.referrerTelegramId, targetId)),
+    db.select().from(achievementUnlocksTable).where(eq(achievementUnlocksTable.telegramId, targetId)),
+  ]);
+
+  const [hpMinedResult, recentMines, completions, rankResult] = await Promise.all([
+    db.execute(sql`SELECT COALESCE(SUM(hp_earned + bonus_hp), 0) as total FROM mining_logs WHERE telegram_id = ${targetId}`),
+    db.select().from(miningLogsTable).where(eq(miningLogsTable.telegramId, targetId)).orderBy(desc(miningLogsTable.minedAt)).limit(5),
+    db.select({
+      id: taskCompletionsTable.id,
+      taskId: taskCompletionsTable.taskId,
+      approved: taskCompletionsTable.approved,
+      completedAt: taskCompletionsTable.completedAt,
+      taskTitle: tasksTable.title,
+      taskReward: tasksTable.reward,
+    }).from(taskCompletionsTable)
+      .leftJoin(tasksTable, eq(taskCompletionsTable.taskId, tasksTable.id))
+      .where(eq(taskCompletionsTable.telegramId, targetId))
+      .orderBy(desc(taskCompletionsTable.completedAt))
+      .limit(20),
+    db.execute(sql`SELECT COUNT(*) + 1 as rank FROM ${usersTable} WHERE balance > ${user.balance}`),
+  ]);
+
+  const totalHpMined = parseInt(String((hpMinedResult.rows[0] as any)?.total ?? "0"), 10);
+  const rank = parseInt(String((rankResult.rows[0] as any)?.rank ?? "1"), 10);
+
+  res.json({
+    id: user.id,
+    telegramId: user.telegramId,
+    username: user.username,
+    firstName: user.firstName,
+    lastName: user.lastName ?? null,
+    balance: user.balance,
+    level: getLevel(user.balance),
+    streak: user.streak,
+    totalMines: user.totalMines,
+    lastMine: user.lastMine?.toISOString() ?? null,
+    lastActive: user.lastActive?.toISOString() ?? null,
+    joinDate: user.joinDate.toISOString(),
+    isBanned: user.isBanned,
+    referralCount: referrals.length,
+    totalHpMined,
+    rank,
+    recentMines: recentMines.map(m => ({ hpEarned: m.hpEarned, bonusHp: m.bonusHp, streak: m.streak, minedAt: m.minedAt.toISOString() })),
+    achievementCount: achievementUnlocks.length,
+    taskCompletions: completions.map(tc => ({
+      id: tc.id,
+      taskId: tc.taskId,
+      taskTitle: tc.taskTitle ?? "Unknown Task",
+      taskReward: tc.taskReward ?? 0,
+      approved: tc.approved === 1,
+      completedAt: tc.completedAt.toISOString(),
+    })),
+    referrals: referrals.slice(0, 15).map(r => ({ refereeTelegramId: r.refereeTelegramId, createdAt: r.createdAt.toISOString() })),
+  });
+});
+
 router.get("/admin/recent-activity", async (req, res): Promise<void> => {
   const adminId = String(req.query.telegramId ?? "");
   if (!isAdmin(adminId)) { res.status(403).json({ error: "Forbidden" }); return; }
