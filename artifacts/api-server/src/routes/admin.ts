@@ -362,4 +362,136 @@ router.get("/admin/deploy-check", async (req, res): Promise<void> => {
   res.json({ overall: allPass ? "PASS" : "FAIL", checks });
 });
 
+// ── GET /api/admin/referral-debug/:telegramId ─────────────────────────────────
+// Returns a complete diagnostic snapshot of a user's referral state.
+// Use this to investigate why a referral succeeded or failed for any given user.
+// Auth: adminTelegramId query param must match ADMIN_TELEGRAM_ID.
+router.get("/admin/referral-debug/:telegramId", async (req, res): Promise<void> => {
+  const adminId = String(req.query.adminTelegramId ?? req.query.telegramId ?? "");
+  if (!isAdmin(adminId)) { res.status(403).json({ error: "Forbidden" }); return; }
+
+  const targetId = req.params.telegramId;
+
+  const [user] = await db.select().from(usersTable).where(eq(usersTable.telegramId, targetId));
+
+  // Referral rows where this user IS the referee (they were referred by someone)
+  const referralAsReferee = await db
+    .select()
+    .from(referralsTable)
+    .where(eq(referralsTable.refereeTelegramId, targetId));
+
+  // Referral rows where this user IS the referrer (they referred others)
+  const referralsAsReferrer = await db
+    .select()
+    .from(referralsTable)
+    .where(eq(referralsTable.referrerTelegramId, targetId));
+
+  // Look up the referrer's account if DB referredBy is set
+  let referrerRecord: { telegramId: string; username: string; firstName: string; balance: number; joinDate: string } | null = null;
+  if (user?.referredBy) {
+    const [referrer] = await db.select().from(usersTable).where(eq(usersTable.telegramId, user.referredBy));
+    if (referrer) {
+      referrerRecord = {
+        telegramId: referrer.telegramId,
+        username: referrer.username,
+        firstName: referrer.firstName,
+        balance: referrer.balance,
+        joinDate: referrer.joinDate.toISOString(),
+      };
+    }
+  }
+
+  // Look up the actual referrer from the referral row (may differ if second-pass used a different ID)
+  let referralRowReferrer: { telegramId: string; username: string; firstName: string } | null = null;
+  if (referralAsReferee.length > 0) {
+    const row = referralAsReferee[0];
+    const [r] = await db.select().from(usersTable).where(eq(usersTable.telegramId, row.referrerTelegramId));
+    if (r) {
+      referralRowReferrer = { telegramId: r.telegramId, username: r.username, firstName: r.firstName };
+    }
+  }
+
+  // Determine what would happen if processReferral were called now (dry run)
+  let simulatedOutcome: string;
+  if (!user) {
+    simulatedOutcome = "user_not_found";
+  } else if (!user.referredBy) {
+    simulatedOutcome = "no_referredBy_in_db — would need frontend to supply it";
+  } else if (user.referredBy === targetId) {
+    simulatedOutcome = "self_referral — invalid";
+  } else if (referralAsReferee.length > 0) {
+    simulatedOutcome = "duplicate_row_exists — referral already credited";
+  } else if (!referrerRecord) {
+    simulatedOutcome = "referrer_not_found — referrer is not in DB";
+  } else {
+    simulatedOutcome = `would_credit — +${500} HC to referrer ${user.referredBy}, +${250} HC to this user`;
+  }
+
+  res.json({
+    queried_at: new Date().toISOString(),
+    target_telegram_id: targetId,
+
+    user_record: user
+      ? {
+          telegramId: user.telegramId,
+          username: user.username,
+          firstName: user.firstName,
+          balance: user.balance,
+          joinDate: user.joinDate.toISOString(),
+          lastActive: user.lastActive?.toISOString() ?? null,
+          isBanned: user.isBanned,
+          referredBy_in_db: user.referredBy ?? null,
+        }
+      : null,
+    user_exists: !!user,
+
+    referral_as_referee: {
+      has_referral_row: referralAsReferee.length > 0,
+      row: referralAsReferee.length > 0
+        ? {
+            id: referralAsReferee[0].id,
+            referrer_telegram_id: referralAsReferee[0].referrerTelegramId,
+            referrer_hp_earned: referralAsReferee[0].referrerHpEarned,
+            referee_hp_earned: referralAsReferee[0].refereeHpEarned,
+            created_at: referralAsReferee[0].createdAt.toISOString(),
+          }
+        : null,
+      referrer_record: referralRowReferrer,
+    },
+
+    referrer_record_from_db_column: referrerRecord,
+
+    referrals_as_referrer: {
+      count: referralsAsReferrer.length,
+      total_hc_earned: referralsAsReferrer.reduce((s, r) => s + r.referrerHpEarned, 0),
+      list: referralsAsReferrer.map(r => ({
+        referee_telegram_id: r.refereeTelegramId,
+        referee_hp_earned: r.refereeHpEarned,
+        referrer_hp_earned: r.referrerHpEarned,
+        created_at: r.createdAt.toISOString(),
+      })),
+    },
+
+    diagnosis: {
+      simulated_processReferral_outcome: simulatedOutcome,
+      referral_credited: referralAsReferee.length > 0,
+      referral_row_missing: referralAsReferee.length === 0,
+      db_referredBy_set: !!user?.referredBy,
+      db_referredBy_matches_row: referralAsReferee.length > 0
+        ? referralAsReferee[0].referrerTelegramId === user?.referredBy
+        : null,
+      referrer_in_db: !!referrerRecord,
+      failure_reason: referralAsReferee.length > 0
+        ? null
+        : !user
+        ? "user_not_found"
+        : !user.referredBy
+        ? "no_referredBy_stored_in_db"
+        : !referrerRecord
+        ? "referrer_not_in_db"
+        : "referral_row_missing_but_all_data_present — second-pass should fix this on next /api/init",
+    },
+  });
+});
+
 export default router;

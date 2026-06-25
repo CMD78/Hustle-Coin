@@ -45,7 +45,8 @@ export const InitUserResponse = zod.object({
   "achievementCount": zod.number(),
   "joinDate": zod.string(),
   "rank": zod.number().nullable(),
-  "badges": zod.array(zod.string()).optional()
+  "badges": zod.array(zod.string()).optional(),
+  "referralStatus": zod.string().optional(),
 })
 
 

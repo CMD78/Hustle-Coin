@@ -1,0 +1,1 @@
+- [Referral system architecture](referral-system.md) — centralized processReferral(), DB-stored referredBy column, ?startapp= link format, second-pass via DB fallback.

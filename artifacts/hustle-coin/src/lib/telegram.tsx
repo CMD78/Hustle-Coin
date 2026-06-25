@@ -23,7 +23,7 @@ export function TelegramProvider({ children }: { children: ReactNode }) {
     localStorage.getItem("telegramId") || "123456789"
   );
   const [user, setUser] = useState<TelegramUser | null>(null);
-  
+
   const initUser = useInitUser();
 
   useEffect(() => {
@@ -35,16 +35,16 @@ export function TelegramProvider({ children }: { children: ReactNode }) {
     }
 
     const tgUser = tg?.initDataUnsafe?.user;
-    
+
     const devUser = {
       id: 123456789,
       first_name: "Dev",
-      username: "devuser"
+      username: "devuser",
     };
 
     const currentUser = tgUser || devUser;
     const currentTelegramId = String(currentUser.id);
-    
+
     setUser(currentUser);
     setTelegramId(currentTelegramId);
     localStorage.setItem("telegramId", currentTelegramId);
@@ -53,12 +53,14 @@ export function TelegramProvider({ children }: { children: ReactNode }) {
     console.log("[TelegramProvider] tg.initDataUnsafe:", JSON.stringify(tg?.initDataUnsafe ?? {}));
     console.log("[TelegramProvider] telegramId resolved to:", currentTelegramId);
 
-    // Resolve the referrer ID using all possible sources, in priority order:
-    // 1. tg.initDataUnsafe.start_param — set when app opened via direct Mini App link (?startapp=)
-    // 2. ?ref= URL param — set by webhook reply button (our primary referral mechanism)
-    // 3. ?startapp= URL param — fallback for direct app link format
-    // 4. ?start= URL param — old fallback
-    // 5. localStorage — persisted from a previous page load so reloads don't lose the referrer
+    // ── Referral source resolution (priority order) ───────────────────────────
+    // 1. tg.initDataUnsafe.start_param — set when app opened via ?startapp= Mini App link.
+    //    This is the PRIMARY and most reliable source. Telegram always injects it.
+    // 2. ?ref= URL param — legacy safety net used by old bot webhook reply buttons.
+    // 3. ?startapp= URL param — direct URL-bar startapp (uncommon, but handled).
+    // 4. ?start= URL param — old legacy format fallback.
+    // 5. localStorage hc_pending_referral — persisted from a previous session so
+    //    page reloads and navigations don't lose the referrer before /api/init fires.
     const params = new URLSearchParams(window.location.search);
     const startParam = tg?.initDataUnsafe?.start_param ?? null;
     const refParam = params.get("ref");
@@ -74,20 +76,43 @@ export function TelegramProvider({ children }: { children: ReactNode }) {
       storedReferral ||
       undefined;
 
-    console.log("[TelegramProvider] referral sources:", {
+    const referredBySource = startParam
+      ? "tg.start_param"
+      : refParam
+      ? "url.ref"
+      : startAppParam
+      ? "url.startapp"
+      : startQueryParam
+      ? "url.start"
+      : storedReferral
+      ? "localStorage"
+      : "none";
+
+    console.log("[TelegramProvider] referral resolution:", {
       start_param: startParam,
       ref_param: refParam,
       startapp_param: startAppParam,
-      start_param_url: startQueryParam,
+      start_query_param: startQueryParam,
       stored_referral: storedReferral,
       resolved: referredBy ?? "none",
+      source: referredBySource,
     });
 
-    // Persist the referral to localStorage so it survives reloads before init fires
-    if (referredBy && referredBy !== currentTelegramId) {
-      localStorage.setItem(PENDING_REFERRAL_KEY, referredBy);
-      console.log("[TelegramProvider] persisted referral to localStorage:", referredBy);
+    const isSelfReferral = referredBy === currentTelegramId;
+    const effectiveReferredBy = referredBy && !isSelfReferral ? referredBy : undefined;
+
+    if (isSelfReferral) {
+      console.warn("[TelegramProvider] self-referral detected — ignoring referredBy");
     }
+
+    // Persist to localStorage so the referrer survives page reloads before init fires.
+    // Only persist if it's not a self-referral.
+    if (effectiveReferredBy) {
+      localStorage.setItem(PENDING_REFERRAL_KEY, effectiveReferredBy);
+      console.log("[TelegramProvider] persisted referral to localStorage:", effectiveReferredBy, "(source:", referredBySource + ")");
+    }
+
+    console.log("[TelegramProvider] calling /api/init with referredBy:", effectiveReferredBy ?? "none");
 
     initUser.mutate(
       {
@@ -96,19 +121,51 @@ export function TelegramProvider({ children }: { children: ReactNode }) {
           username: currentUser.username || "user",
           firstName: currentUser.first_name,
           lastName: currentUser.last_name,
-          // Only send referredBy if it's truthy and not a self-referral
-          referredBy: referredBy && referredBy !== currentTelegramId ? referredBy : undefined,
+          referredBy: effectiveReferredBy,
           initData: tg?.initData,
         },
       },
       {
-        onSuccess: () => {
-          // Clear stored referral after a successful init — whether it was used or not
-          localStorage.removeItem(PENDING_REFERRAL_KEY);
-          console.log("[TelegramProvider] init succeeded, cleared pending referral");
+        onSuccess: (data) => {
+          const status = (data as any)?.referralStatus ?? "unknown";
+          console.log("[TelegramProvider] /api/init succeeded — referralStatus:", status, "| balance:", (data as any)?.balance);
+
+          // ── localStorage clearing strategy ──────────────────────────────────
+          // Only clear the pending referral from localStorage when we're confident
+          // it has been processed (or definitively can't be processed).
+          //
+          // CLEAR when:
+          //   - "credited" → referral was successfully applied ✅
+          //   - "skipped_duplicate" → referral row already exists (already credited) ✅
+          //   - "welcome_bonus_only" / "no_referral" → no referredBy was sent at all
+          //   - "skipped_self" / "skipped_invalid" → bad referral, no point retrying
+          //   - "skipped_race_condition_duplicate" → DB caught a concurrent insert ✅
+          //
+          // KEEP when:
+          //   - "skipped_referrer_not_found" → referrer not in DB yet; may appear later.
+          //     Keep localStorage so the NEXT app open can retry the second-pass.
+          //   - status is missing/unknown and a referredBy was sent → keep for safety.
+          //
+          const shouldClear =
+            status === "credited" ||
+            status === "skipped_duplicate" ||
+            status === "welcome_bonus_only" ||
+            status === "no_referral" ||
+            status.startsWith("skipped_self") ||
+            status.startsWith("skipped_invalid") ||
+            status.startsWith("skipped_race_condition") ||
+            !effectiveReferredBy; // no referredBy was sent, nothing to keep
+
+          if (shouldClear) {
+            localStorage.removeItem(PENDING_REFERRAL_KEY);
+            console.log("[TelegramProvider] cleared pending referral from localStorage (status:", status + ")");
+          } else {
+            console.log("[TelegramProvider] keeping pending referral in localStorage for retry (status:", status + ")");
+          }
         },
-        onError: () => {
-          console.warn("[TelegramProvider] init failed — keeping pending referral for retry");
+        onError: (err) => {
+          console.warn("[TelegramProvider] /api/init failed — keeping pending referral for retry:", err);
+          // Do NOT clear localStorage on network/server errors — let the next page load retry.
         },
       }
     );
