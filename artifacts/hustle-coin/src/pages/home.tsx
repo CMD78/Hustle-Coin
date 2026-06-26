@@ -18,7 +18,9 @@ export default function Home() {
   if (!dashboard) return null;
 
   const { user } = dashboard;
-  
+
+  if (!user) return null;
+
   const thresholds = [0, 500, 1000, 2500, 5000, 10000, 25000, 50000];
   const currentThreshold = thresholds[user.level - 1] || 0;
   const nextThreshold = thresholds[user.level] || 50000;
