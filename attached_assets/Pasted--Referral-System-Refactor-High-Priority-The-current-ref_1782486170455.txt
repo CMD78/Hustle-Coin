@@ -1,0 +1,163 @@
+# Referral System Refactor (High Priority)
+
+The current referral system has intermittent failures. I do NOT want another patch. I want the referral flow redesigned while preserving the existing reward amounts and business rules.
+
+## Scope
+
+Work ONLY on the referral system.
+
+Do NOT modify:
+- Mining
+- Tasks
+- Achievements
+- Wallet
+- Leaderboard
+- Community Program
+- Admin panel (except adding referral tools requested below)
+- UI styling unrelated to referrals
+
+## Goal
+
+Create one simple, reliable referral flow.
+
+Current issues include:
+- Some users receive only the welcome bonus.
+- Some referrals never reach the backend.
+- referredBy is sometimes null.
+- Some referral attempts disappear with no trace.
+- Too many fallback paths make debugging difficult.
+
+## Requirements
+
+### 1. Single Referral Flow
+
+Use ONE referral entry flow.
+
+User clicks referral link →
+Telegram opens Mini App →
+Referral ID reaches backend →
+Backend permanently stores referrer →
+Referral rewards are processed immediately.
+
+Remove unnecessary fallback logic that causes inconsistent behaviour.
+
+### 2. Store Referrer Immediately
+
+On the user's first successful initialization:
+
+- Save referredBy permanently in the users table.
+- Never lose this value.
+- Never overwrite it after it has been set.
+
+### 3. Referral Event Log
+
+Create a new table:
+
+referral_events
+
+Each attempt should record:
+
+- timestamp
+- referrer telegram id
+- referee telegram id
+- step
+- result
+- message
+
+Example:
+
+Link Opened
+Init Received
+Referrer Stored
+Reward Processed
+Duplicate Referral
+Missing Referrer
+Rejected
+Completed
+
+This log will be used for debugging.
+
+### 4. Atomic Reward Processing
+
+Reward processing must be transactional.
+
+Prevent:
+
+- duplicate rewards
+- race conditions
+- partial updates
+
+Either everything succeeds or everything rolls back.
+
+### 5. Admin Repair Tool
+
+Add a new Admin action:
+
+Repair Referral
+
+Inputs:
+
+- Referrer Telegram ID
+- Referee Telegram ID
+
+The tool should:
+
+- validate eligibility
+- detect duplicates
+- insert missing referral row
+- award missing rewards
+- log the repair event
+
+### 6. Referral Diagnostics
+
+Improve the existing referral diagnostic endpoint.
+
+It should clearly report:
+
+- referral link received?
+- referredBy stored?
+- referral row exists?
+- reward processed?
+- duplicate?
+- exact failure reason
+
+### 7. Automated Testing
+
+Before finishing, automatically test at least these scenarios:
+
+1. Brand new user via referral
+2. Existing user
+3. Duplicate referral
+4. Self referral
+5. Invalid referrer
+6. Missing referral parameter
+7. Menu button launch
+8. Direct Mini App launch
+9. Concurrent referral requests
+10. Referral repaired using admin tool
+
+Produce a pass/fail report.
+
+### 8. Preserve Existing Rules
+
+Keep:
+
+- Referrer reward = 500 HC
+- Referee reward = 250 HC
+- Existing cooldowns
+- Existing duplicate protection
+- Existing referral counts
+
+Do not change game economics.
+
+### 9. Final Report
+
+When complete provide:
+
+- Files modified
+- Database changes
+- API changes
+- Test results
+- Remaining known issues (if any)
+
+Do not stop until every test passes.

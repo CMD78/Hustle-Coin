@@ -14,3 +14,16 @@ export const referralsTable = pgTable("referrals", {
 export const insertReferralSchema = createInsertSchema(referralsTable).omit({ id: true, createdAt: true });
 export type InsertReferral = z.infer<typeof insertReferralSchema>;
 export type Referral = typeof referralsTable.$inferSelect;
+
+export const referralEventsTable = pgTable("referral_events", {
+  id: serial("id").primaryKey(),
+  referrerTelegramId: text("referrer_telegram_id"),
+  refereeTelegramId: text("referee_telegram_id").notNull(),
+  step: text("step").notNull(),
+  result: text("result").notNull(),
+  message: text("message"),
+  source: text("source"),
+  createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+});
+
+export type ReferralEvent = typeof referralEventsTable.$inferSelect;

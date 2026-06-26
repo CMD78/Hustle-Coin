@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { db, usersTable, referralsTable, achievementUnlocksTable, miningLogsTable, adminLogsTable, feedbackTable, taskCompletionsTable, tasksTable } from "@workspace/db";
+import { db, usersTable, referralsTable, referralEventsTable, achievementUnlocksTable, miningLogsTable, adminLogsTable, feedbackTable, taskCompletionsTable, tasksTable } from "@workspace/db";
 import { eq, gte, ilike, or, desc, sql, and } from "drizzle-orm";
 import {
   GetAdminStatsQueryParams, GetAdminStatsResponse,
@@ -8,7 +8,7 @@ import {
   BroadcastMessageBody, BroadcastMessageResponse,
   GetAdminFeedbackQueryParams, GetAdminFeedbackResponse,
 } from "@workspace/api-zod";
-import { ADMIN_TELEGRAM_ID, getLevel } from "../lib/hustlecoin";
+import { ADMIN_TELEGRAM_ID, getLevel, processReferral, REFERRER_REWARD, REFEREE_REWARD } from "../lib/hustlecoin";
 
 const router: IRouter = Router();
 
@@ -336,6 +336,13 @@ router.get("/admin/deploy-check", async (req, res): Promise<void> => {
   }
 
   try {
+    const eventCount = (await db.select().from(referralEventsTable)).length;
+    checks.referral_events = { status: "PASS", detail: `${eventCount} referral events logged` };
+  } catch {
+    checks.referral_events = { status: "FAIL", detail: "referral_events table not yet created — run DB push" };
+  }
+
+  try {
     const mineCount = (await db.select().from(miningLogsTable)).length;
     checks.mining = { status: "PASS", detail: `${mineCount} mining events` };
   } catch {
@@ -355,38 +362,140 @@ router.get("/admin/deploy-check", async (req, res): Promise<void> => {
   checks.telegram_username = { status: botUsername ? "PASS" : "FAIL", detail: botUsername ? `@${botUsername}` : "Set BOT_USERNAME env var" };
   checks.hmac = { status: "PASS", detail: "HMAC validation via initData supported" };
   checks.security = { status: "PASS", detail: "Admin gated by Telegram ID + ban enforcement" };
-  checks.rewards = { status: "PASS", detail: "Base: 100 HC/day, Referrer: +500, Referee: +250, Welcome: +250" };
+  checks.rewards = { status: "PASS", detail: `Referrer: +${REFERRER_REWARD} HC, Referee: +${REFEREE_REWARD} HC, Welcome: +250 HC` };
   checks.version = { status: "PASS", detail: "HustleCoin Beta v1.0" };
 
   const allPass = Object.values(checks).every(c => c.status === "PASS");
   res.json({ overall: allPass ? "PASS" : "FAIL", checks });
 });
 
+// ── POST /api/admin/repair-referral ──────────────────────────────────────────
+// Manually credits a missed referral between two existing users.
+// Useful when a referral link was clicked but the reward was not issued
+// (e.g., referrer wasn't in DB at the time).
+//
+// Pre-conditions checked before calling processReferral:
+//   - Both users must exist in DB
+//   - No referral row must already exist for the referee
+//   - Not a self-referral
+//
+// Auth: adminTelegramId body field must match ADMIN_TELEGRAM_ID.
+// ─────────────────────────────────────────────────────────────────────────────
+router.post("/admin/repair-referral", async (req, res): Promise<void> => {
+  const adminId = String(req.body?.adminTelegramId ?? "");
+  if (!isAdmin(adminId)) { res.status(403).json({ error: "Forbidden" }); return; }
+
+  const referrerTelegramId = String(req.body?.referrerTelegramId ?? "").trim();
+  const refereeTelegramId  = String(req.body?.refereeTelegramId  ?? "").trim();
+
+  if (!referrerTelegramId || !refereeTelegramId) {
+    res.status(400).json({ error: "referrerTelegramId and refereeTelegramId are required" });
+    return;
+  }
+
+  if (referrerTelegramId === refereeTelegramId) {
+    res.status(400).json({ error: "Cannot repair a self-referral" });
+    return;
+  }
+
+  const [[referrer], [referee]] = await Promise.all([
+    db.select().from(usersTable).where(eq(usersTable.telegramId, referrerTelegramId)),
+    db.select().from(usersTable).where(eq(usersTable.telegramId, refereeTelegramId)),
+  ]);
+
+  if (!referrer) {
+    res.status(404).json({ error: `Referrer ${referrerTelegramId} not found in DB` });
+    return;
+  }
+  if (!referee) {
+    res.status(404).json({ error: `Referee ${refereeTelegramId} not found in DB` });
+    return;
+  }
+
+  const [existingRef] = await db
+    .select()
+    .from(referralsTable)
+    .where(eq(referralsTable.refereeTelegramId, refereeTelegramId));
+
+  if (existingRef) {
+    res.status(409).json({
+      error: "Referral already exists for this referee",
+      existing_referral: {
+        referrer_telegram_id: existingRef.referrerTelegramId,
+        referrer_hp_earned: existingRef.referrerHpEarned,
+        referee_hp_earned: existingRef.refereeHpEarned,
+        created_at: existingRef.createdAt.toISOString(),
+      },
+    });
+    return;
+  }
+
+  const result = await processReferral(refereeTelegramId, referrerTelegramId, "admin_repair");
+
+  // Persist referredBy on the user row if not already set
+  if (result.credited && !referee.referredBy) {
+    await db.update(usersTable)
+      .set({ referredBy: referrerTelegramId })
+      .where(eq(usersTable.telegramId, refereeTelegramId));
+  }
+
+  // Log the admin action
+  await db.insert(adminLogsTable).values({
+    adminTelegramId: adminId,
+    action: "repair_referral",
+    targetTelegramId: refereeTelegramId,
+    details: `referee=${refereeTelegramId}, referrer=${referrerTelegramId}, result=${result.credited ? "credited" : result.reason}`,
+  });
+
+  res.json({
+    success: result.credited,
+    referrer_telegram_id: referrerTelegramId,
+    referee_telegram_id: refereeTelegramId,
+    result: result.credited ? "credited" : "skipped",
+    reason: result.reason ?? null,
+    message: result.credited
+      ? `Referral repaired — referrer +${REFERRER_REWARD} HC, referee +${REFEREE_REWARD} HC`
+      : `Repair skipped: ${result.reason}`,
+  });
+});
+
 // ── GET /api/admin/referral-debug/:telegramId ─────────────────────────────────
-// Returns a complete diagnostic snapshot of a user's referral state.
-// Use this to investigate why a referral succeeded or failed for any given user.
+// Returns a complete diagnostic snapshot of a user's referral state including
+// the full event log for the referee (all steps that were recorded).
+//
+// Diagnosis section answers:
+//   - Was a referral link received?     → link_opened event in referral_events
+//   - Was referredBy stored?            → referrer_stored event
+//   - Was a referral row created?       → referral_as_referee.has_referral_row
+//   - Were rewards credited?            → completed event / referral row present
+//   - Was there a duplicate?            → duplicate_referral event
+//   - Exact failure reason?             → failure_reason field + events log
+//
 // Auth: adminTelegramId query param must match ADMIN_TELEGRAM_ID.
+// ─────────────────────────────────────────────────────────────────────────────
 router.get("/admin/referral-debug/:telegramId", async (req, res): Promise<void> => {
   const adminId = String(req.query.adminTelegramId ?? req.query.telegramId ?? "");
   if (!isAdmin(adminId)) { res.status(403).json({ error: "Forbidden" }); return; }
 
   const targetId = req.params.telegramId;
 
-  const [user] = await db.select().from(usersTable).where(eq(usersTable.telegramId, targetId));
+  const [
+    [user],
+    referralAsReferee,
+    referralsAsReferrer,
+    recentEvents,
+  ] = await Promise.all([
+    db.select().from(usersTable).where(eq(usersTable.telegramId, targetId)),
+    db.select().from(referralsTable).where(eq(referralsTable.refereeTelegramId, targetId)),
+    db.select().from(referralsTable).where(eq(referralsTable.referrerTelegramId, targetId)),
+    db.select()
+      .from(referralEventsTable)
+      .where(eq(referralEventsTable.refereeTelegramId, targetId))
+      .orderBy(desc(referralEventsTable.createdAt))
+      .limit(30),
+  ]);
 
-  // Referral rows where this user IS the referee (they were referred by someone)
-  const referralAsReferee = await db
-    .select()
-    .from(referralsTable)
-    .where(eq(referralsTable.refereeTelegramId, targetId));
-
-  // Referral rows where this user IS the referrer (they referred others)
-  const referralsAsReferrer = await db
-    .select()
-    .from(referralsTable)
-    .where(eq(referralsTable.referrerTelegramId, targetId));
-
-  // Look up the referrer's account if DB referredBy is set
+  // Look up the referrer from the DB column
   let referrerRecord: { telegramId: string; username: string; firstName: string; balance: number; joinDate: string } | null = null;
   if (user?.referredBy) {
     const [referrer] = await db.select().from(usersTable).where(eq(usersTable.telegramId, user.referredBy));
@@ -401,7 +510,7 @@ router.get("/admin/referral-debug/:telegramId", async (req, res): Promise<void> 
     }
   }
 
-  // Look up the actual referrer from the referral row (may differ if second-pass used a different ID)
+  // Look up the referrer from the referral row (may differ from DB column)
   let referralRowReferrer: { telegramId: string; username: string; firstName: string } | null = null;
   if (referralAsReferee.length > 0) {
     const row = referralAsReferee[0];
@@ -411,7 +520,7 @@ router.get("/admin/referral-debug/:telegramId", async (req, res): Promise<void> 
     }
   }
 
-  // Determine what would happen if processReferral were called now (dry run)
+  // Determine what processReferral would return if called now (dry run)
   let simulatedOutcome: string;
   if (!user) {
     simulatedOutcome = "user_not_found";
@@ -424,8 +533,24 @@ router.get("/admin/referral-debug/:telegramId", async (req, res): Promise<void> 
   } else if (!referrerRecord) {
     simulatedOutcome = "referrer_not_found — referrer is not in DB";
   } else {
-    simulatedOutcome = `would_credit — +${500} HC to referrer ${user.referredBy}, +${250} HC to this user`;
+    simulatedOutcome = `would_credit — +${REFERRER_REWARD} HC to referrer ${user.referredBy}, +${REFEREE_REWARD} HC to this user`;
   }
+
+  // Failure reason derivation from event log
+  const lastFailEvent = recentEvents.find(e => e.result === "skipped" || e.result === "failed");
+  const lastSuccessEvent = recentEvents.find(e => e.result === "success" && e.step === "completed");
+
+  const failureReason = referralAsReferee.length > 0
+    ? null
+    : !user
+    ? "user_not_found"
+    : !user.referredBy
+    ? "no_referredBy_stored_in_db"
+    : !referrerRecord
+    ? "referrer_not_in_db"
+    : lastFailEvent
+    ? `${lastFailEvent.step}: ${lastFailEvent.message ?? lastFailEvent.result}`
+    : "referral_row_missing_but_all_data_present — second-pass should fix on next /api/init";
 
   res.json({
     queried_at: new Date().toISOString(),
@@ -472,6 +597,16 @@ router.get("/admin/referral-debug/:telegramId", async (req, res): Promise<void> 
       })),
     },
 
+    referral_events: recentEvents.map(e => ({
+      id: e.id,
+      step: e.step,
+      result: e.result,
+      message: e.message ?? null,
+      source: e.source ?? null,
+      referrer_telegram_id: e.referrerTelegramId ?? null,
+      created_at: e.createdAt.toISOString(),
+    })),
+
     diagnosis: {
       simulated_processReferral_outcome: simulatedOutcome,
       referral_credited: referralAsReferee.length > 0,
@@ -481,15 +616,11 @@ router.get("/admin/referral-debug/:telegramId", async (req, res): Promise<void> 
         ? referralAsReferee[0].referrerTelegramId === user?.referredBy
         : null,
       referrer_in_db: !!referrerRecord,
-      failure_reason: referralAsReferee.length > 0
-        ? null
-        : !user
-        ? "user_not_found"
-        : !user.referredBy
-        ? "no_referredBy_stored_in_db"
-        : !referrerRecord
-        ? "referrer_not_in_db"
-        : "referral_row_missing_but_all_data_present — second-pass should fix this on next /api/init",
+      link_opened_event_found: recentEvents.some(e => e.step === "link_opened"),
+      referrer_stored_event_found: recentEvents.some(e => e.step === "referrer_stored"),
+      reward_credited_event_found: recentEvents.some(e => e.step === "completed" && e.result === "success"),
+      duplicate_event_found: recentEvents.some(e => e.step === "duplicate_referral"),
+      failure_reason: failureReason,
     },
   });
 });

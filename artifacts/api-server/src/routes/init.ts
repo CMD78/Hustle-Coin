@@ -2,21 +2,36 @@ import { Router, type IRouter } from "express";
 import { db, usersTable, referralsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { InitUserBody, InitUserResponse } from "@workspace/api-zod";
-import { getLevel, getBadges, getMineCountdown, canMine, checkAndUnlockAchievements, ADMIN_TELEGRAM_ID, WELCOME_BONUS, processReferral } from "../lib/hustlecoin";
+import {
+  getLevel,
+  getBadges,
+  getMineCountdown,
+  canMine,
+  checkAndUnlockAchievements,
+  ADMIN_TELEGRAM_ID,
+  WELCOME_BONUS,
+  processReferral,
+  logReferralEvent,
+} from "../lib/hustlecoin";
 
 const router: IRouter = Router();
 
+// ── POST /api/init ────────────────────────────────────────────────────────────
+// Primary Mini App entry point. Called every time the user opens the app.
+//
+// Referral flow (single entry):
+//   New user   → create record → processReferral (credited) OR welcome bonus (fallback)
+//   Exist user → update profile → second-pass if referral not yet credited
+//
+// referralStatus values returned to frontend:
+//   "credited"                    — referral rewards issued
+//   "skipped_duplicate"           — referral row already exists
+//   "skipped_referrer_not_found"  — referrer not yet in DB, welcome bonus granted
+//   "skipped_<reason>"            — other skip (self, race, etc.)
+//   "welcome_bonus_only"          — no referral param, base welcome bonus given
+//   "no_referral"                 — existing user, no pending referral
+// ─────────────────────────────────────────────────────────────────────────────
 router.post("/init", async (req, res): Promise<void> => {
-  req.log.info({
-    debug_init_raw_body: {
-      keys: Object.keys(req.body ?? {}),
-      telegramId: req.body?.telegramId,
-      referredBy_raw: req.body?.referredBy,
-      referredBy_type: typeof req.body?.referredBy,
-      initData_present: !!req.body?.initData,
-    }
-  }, "[REFERRAL_DEBUG] /api/init — raw request body received");
-
   const parsed = InitUserBody.safeParse(req.body);
   if (!parsed.success) {
     res.status(400).json({ error: parsed.error.message });
@@ -25,37 +40,33 @@ router.post("/init", async (req, res): Promise<void> => {
 
   const { telegramId, username, firstName, lastName, referredBy: referredByFromRequest } = parsed.data;
 
-  req.log.info({
-    debug_init_parsed: {
-      telegramId,
-      referredBy_from_request: referredByFromRequest ?? null,
-      referredBy_truthy: !!referredByFromRequest,
-      is_self_referral: referredByFromRequest === telegramId,
-    }
-  }, "[REFERRAL_DEBUG] parsed init body");
+  // Normalise: only accept non-self referredBy values
+  const effectiveReferredBy =
+    referredByFromRequest && referredByFromRequest !== telegramId ? referredByFromRequest : null;
+
+  req.log.info(
+    { telegramId, referredBy: effectiveReferredBy ?? null, source: effectiveReferredBy ? "referral_link" : "direct" },
+    "[INIT] request received"
+  );
+
+  // Log that a referral link was opened (before any DB work)
+  if (effectiveReferredBy) {
+    await logReferralEvent({
+      referrerTelegramId: effectiveReferredBy,
+      refereeTelegramId: telegramId,
+      step: "link_opened",
+      result: "success",
+      message: `startapp=${effectiveReferredBy} received in /api/init`,
+      source: "init",
+    });
+  }
 
   let [user] = await db.select().from(usersTable).where(eq(usersTable.telegramId, telegramId));
-
-  req.log.info({
-    debug_init_user_lookup: {
-      telegramId,
-      user_exists: !!user,
-      existing_balance: user?.balance ?? null,
-      db_referredBy: user?.referredBy ?? null,
-    }
-  }, "[REFERRAL_DEBUG] user lookup result");
-
-  // referralStatus is returned to the frontend so it knows whether to clear
-  // the pending referral from localStorage.
-  // Possible values: "credited" | "skipped_duplicate" | "skipped_referrer_not_found"
-  //                | "skipped_self" | "skipped_invalid" | "welcome_bonus_only" | "no_referral"
   let referralStatus = "no_referral";
 
   if (!user) {
     // ── NEW USER ─────────────────────────────────────────────────────────────
     const isAdmin = telegramId === ADMIN_TELEGRAM_ID;
-    const effectiveReferredBy =
-      referredByFromRequest && referredByFromRequest !== telegramId ? referredByFromRequest : null;
 
     [user] = await db
       .insert(usersTable)
@@ -71,54 +82,40 @@ router.post("/init", async (req, res): Promise<void> => {
       .returning();
 
     if (effectiveReferredBy) {
-      req.log.info(
-        { telegramId, referredBy: effectiveReferredBy, source: "request" },
-        "[REFERRAL_DEBUG] new user — attempting processReferral"
-      );
+      // Log that referredBy was stored for this user
+      await logReferralEvent({
+        referrerTelegramId: effectiveReferredBy,
+        refereeTelegramId: telegramId,
+        step: "referrer_stored",
+        result: "success",
+        message: `referredBy=${effectiveReferredBy} stored for new user`,
+        source: "init",
+      });
 
-      const result = await processReferral(telegramId, effectiveReferredBy);
+      const result = await processReferral(telegramId, effectiveReferredBy, "init");
 
       if (result.credited) {
         [user] = await db.select().from(usersTable).where(eq(usersTable.telegramId, telegramId));
         referralStatus = "credited";
-        req.log.info(
-          { telegramId, referredBy: effectiveReferredBy },
-          "[REFERRAL_DEBUG] ✅ new user referral credited"
-        );
+        req.log.info({ telegramId, referredBy: effectiveReferredBy }, "[INIT] ✅ new user referral credited");
       } else if (result.reason === "referrer_not_found") {
-        // Referrer not yet in DB — grant welcome bonus; keep referralStatus as-is
-        // so frontend preserves localStorage (referrer may join DB later, but
-        // realistically the retry window is short — welcome bonus is a fair fallback).
         await db.update(usersTable).set({ balance: WELCOME_BONUS }).where(eq(usersTable.telegramId, telegramId));
         [user] = await db.select().from(usersTable).where(eq(usersTable.telegramId, telegramId));
         referralStatus = "skipped_referrer_not_found";
-        req.log.info(
-          { telegramId, referredBy: effectiveReferredBy },
-          "[REFERRAL_DEBUG] referrer not found — welcome bonus granted"
-        );
+        req.log.info({ telegramId, referredBy: effectiveReferredBy }, "[INIT] referrer not found — welcome bonus granted");
       } else {
-        // Any other skip reason (self-referral, race-condition duplicate, etc.)
         await db.update(usersTable).set({ balance: WELCOME_BONUS }).where(eq(usersTable.telegramId, telegramId));
         [user] = await db.select().from(usersTable).where(eq(usersTable.telegramId, telegramId));
         referralStatus = `skipped_${result.reason ?? "unknown"}`;
-        req.log.info(
-          { telegramId, referredBy: effectiveReferredBy, reason: result.reason },
-          "[REFERRAL_DEBUG] referral skipped — welcome bonus granted as fallback"
-        );
+        req.log.info({ telegramId, referredBy: effectiveReferredBy, reason: result.reason }, "[INIT] referral skipped — welcome bonus granted");
       }
 
     } else {
       // No referral — grant welcome bonus
       referralStatus = "welcome_bonus_only";
-      req.log.info({
-        telegramId,
-        referredBy_from_request: referredByFromRequest ?? null,
-        reason: !referredByFromRequest ? "referredBy_falsy" : "self_referral",
-        bonus: WELCOME_BONUS,
-      }, "[REFERRAL_DEBUG] new user — no valid referral — granting welcome bonus");
-
       await db.update(usersTable).set({ balance: WELCOME_BONUS }).where(eq(usersTable.telegramId, telegramId));
       [user] = await db.select().from(usersTable).where(eq(usersTable.telegramId, telegramId));
+      req.log.info({ telegramId }, "[INIT] new user, no referral — welcome bonus granted");
     }
 
   } else {
@@ -134,61 +131,58 @@ router.post("/init", async (req, res): Promise<void> => {
       .where(eq(usersTable.telegramId, telegramId));
     [user] = await db.select().from(usersTable).where(eq(usersTable.telegramId, telegramId));
 
-    // SECOND-PASS REFERRAL SAFETY NET
-    // This fires when:
-    //   a) The webhook created the user and processed the referral, but the referral row
-    //      insert failed silently (race/error) — the DB referredBy column preserves the ID.
-    //   b) The user was created via webhook or init without a referral, then opens the app
-    //      later via a referral link (start_param present → frontend sends referredBy).
-    //   c) The user opens via menu button (no start_param), but their DB referredBy column
-    //      was written at creation time and no referral row was ever created.
+    // ── SECOND-PASS REFERRAL SAFETY NET ──────────────────────────────────────
+    // Fires when an existing user has a referredBy that was never credited.
+    // Cases where this matters:
+    //   a) Webhook created the user with referredBy, but processReferral failed
+    //      (referrer wasn't in DB yet) — DB column preserves the ID for later.
+    //   b) User was created without a referral, then later opened the app via a
+    //      referral link (startapp= present → frontend sends referredBy here).
     //
-    // Priority: request referredBy > DB-stored referredBy
-    const effectiveReferredBy =
-      (referredByFromRequest && referredByFromRequest !== telegramId ? referredByFromRequest : null) ??
+    // Priority: request referredBy > DB-stored referredBy (request is more recent).
+    const resolvedReferredBy =
+      effectiveReferredBy ??
       (user.referredBy && user.referredBy !== telegramId ? user.referredBy : null);
 
-    req.log.info({
-      telegramId,
-      referredBy_from_request: referredByFromRequest ?? null,
-      referredBy_from_db: user.referredBy ?? null,
-      effective_referredBy: effectiveReferredBy,
-    }, "[REFERRAL_DEBUG] existing user — resolved effective referredBy for second-pass check");
-
-    if (effectiveReferredBy) {
+    if (resolvedReferredBy) {
       const [existingRef] = await db
         .select()
         .from(referralsTable)
         .where(eq(referralsTable.refereeTelegramId, telegramId));
 
       if (!existingRef) {
+        // Store referredBy on the user row if it came from the request and wasn't stored yet
+        if (effectiveReferredBy && !user.referredBy) {
+          await db.update(usersTable)
+            .set({ referredBy: effectiveReferredBy })
+            .where(eq(usersTable.telegramId, telegramId));
+          await logReferralEvent({
+            referrerTelegramId: effectiveReferredBy,
+            refereeTelegramId: telegramId,
+            step: "referrer_stored",
+            result: "success",
+            message: `referredBy=${effectiveReferredBy} stored for existing user (second-pass)`,
+            source: "init_second_pass",
+          });
+        }
+
         req.log.info(
-          { telegramId, referredBy: effectiveReferredBy },
-          "[REFERRAL_DEBUG] existing user has no referral row — attempting second-pass processReferral"
+          { telegramId, resolvedReferredBy },
+          "[INIT] existing user has no referral row — second-pass processReferral"
         );
 
-        const result = await processReferral(telegramId, effectiveReferredBy);
+        const result = await processReferral(telegramId, resolvedReferredBy, "init_second_pass");
 
         if (result.credited) {
           [user] = await db.select().from(usersTable).where(eq(usersTable.telegramId, telegramId));
           referralStatus = "credited";
-          req.log.info(
-            { telegramId, referredBy: effectiveReferredBy },
-            "[REFERRAL_DEBUG] ✅ second-pass referral credited"
-          );
+          req.log.info({ telegramId, resolvedReferredBy }, "[INIT] ✅ second-pass referral credited");
         } else {
           referralStatus = `skipped_${result.reason ?? "unknown"}`;
-          req.log.info(
-            { telegramId, referredBy: effectiveReferredBy, reason: result.reason },
-            "[REFERRAL_DEBUG] second-pass referral skipped"
-          );
+          req.log.info({ telegramId, resolvedReferredBy, reason: result.reason }, "[INIT] second-pass referral skipped");
         }
       } else {
         referralStatus = "skipped_duplicate";
-        req.log.info(
-          { telegramId, referredBy: effectiveReferredBy, existing_referrer: existingRef.referrerTelegramId },
-          "[REFERRAL_DEBUG] existing user already has referral row — no action needed"
-        );
       }
     }
   }
@@ -202,12 +196,10 @@ router.post("/init", async (req, res): Promise<void> => {
 
   const mineCountdown = getMineCountdown(user.lastMine);
 
-  req.log.info({
-    telegramId,
-    final_balance: user.balance,
-    referral_status: referralStatus,
-    referral_count: referralCount,
-  }, "[REFERRAL_DEBUG] /api/init complete");
+  req.log.info(
+    { telegramId, final_balance: user.balance, referralStatus, referralCount },
+    "[INIT] complete"
+  );
 
   res.json(
     InitUserResponse.parse({

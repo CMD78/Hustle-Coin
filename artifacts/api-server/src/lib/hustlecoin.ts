@@ -1,4 +1,4 @@
-import { db, usersTable, referralsTable, achievementsTable, achievementUnlocksTable, questProgressTable, questsTable } from "@workspace/db";
+import { db, usersTable, referralsTable, achievementsTable, achievementUnlocksTable, questProgressTable, questsTable, referralEventsTable } from "@workspace/db";
 import { eq, and, sql } from "drizzle-orm";
 import { logger } from "./logger";
 
@@ -57,142 +57,239 @@ export function getBadges(user: { referralCount: number; streak: number; balance
   return badges;
 }
 
+// ── Referral Event Logger ─────────────────────────────────────────────────────
+// Writes an audit entry to referral_events. Never throws — event logging must
+// not disrupt the main request flow. Always called OUTSIDE a db.transaction()
+// callback so records persist even if the surrounding transaction rolls back.
+export async function logReferralEvent(event: {
+  referrerTelegramId?: string | null;
+  refereeTelegramId: string;
+  step: string;
+  result: string;
+  message?: string | null;
+  source?: string | null;
+}): Promise<void> {
+  try {
+    await db.insert(referralEventsTable).values({
+      referrerTelegramId: event.referrerTelegramId ?? null,
+      refereeTelegramId: event.refereeTelegramId,
+      step: event.step,
+      result: event.result,
+      message: event.message ?? null,
+      source: event.source ?? null,
+    });
+  } catch (err) {
+    logger.error({ err, event }, "[REFERRAL_EVENT] failed to log event (non-fatal)");
+  }
+}
+
+class ReferralSkipError extends Error {
+  constructor(public readonly reason: string) {
+    super(reason);
+    this.name = "ReferralSkipError";
+  }
+}
+
 // ── Centralized Referral Processor ───────────────────────────────────────────
-// Single source of truth for all referral logic.
-// Called from: /api/init (new-user), /api/init (second-pass), /api/webhook (/start), /telegram/start.
+// Single source of truth for all referral reward logic.
 //
-// Returns { credited: true } when rewards were issued, or
-//         { credited: false, reason } when skipped (with reason for logging/diagnostics).
+// All critical DB operations are wrapped in one atomic db.transaction():
+//   1. Duplicate check       }
+//   2. Referrer existence    } — reads + writes inside one transaction
+//   3. Referee existence     }
+//   4. Insert referral row   }  ← DB UNIQUE constraint = hard backstop
+//   5. Credit referrer (+500)}
+//   6. Credit referee (+250) }
 //
-// Design decisions:
-// - Fetches referee balance from DB (no stale-param risk).
-// - Uses atomic SQL increments for balance updates (prevents read-modify-write races).
-// - Catches DB unique constraint violations on insert (concurrent race safety net).
-// - The referrals.referee_telegram_id column has a DB-level UNIQUE constraint —
-//   this is the hard backstop; the app-level duplicate check is the first line.
+// Event logging happens OUTSIDE the transaction so events survive rollbacks.
+// Side effects (quests, achievements) run after the transaction commits.
+//
+// source: identifies the call site for the audit log.
+//   "init"             — /api/init (new user primary path)
+//   "init_second_pass" — /api/init (existing user retry)
+//   "webhook"          — Telegram /start command (new user)
+//   "telegram_start"   — /telegram/start endpoint (new user)
+//   "admin_repair"     — POST /api/admin/repair-referral
 // ─────────────────────────────────────────────────────────────────────────────
 export async function processReferral(
   refereeTelegramId: string,
   referrerTelegramId: string,
+  source: string = "init",
 ): Promise<{ credited: boolean; reason?: string }> {
-  const logCtx = { refereeTelegramId, referrerTelegramId };
+  const logCtx = { refereeTelegramId, referrerTelegramId, source };
 
-  // Guard: self-referral or missing IDs
+  // Pre-transaction guard: self or missing IDs (no DB read needed)
   if (!referrerTelegramId || !refereeTelegramId || referrerTelegramId === refereeTelegramId) {
     logger.info(logCtx, "[REFERRAL] skipped — invalid or self-referral");
+    await logReferralEvent({
+      referrerTelegramId,
+      refereeTelegramId,
+      step: "rejected",
+      result: "skipped",
+      message: "invalid_or_self_referral",
+      source,
+    });
     return { credited: false, reason: "invalid_or_self_referral" };
   }
 
-  // Guard: no duplicate rows (also enforced at DB level via UNIQUE constraint)
-  const [existing] = await db
-    .select()
-    .from(referralsTable)
-    .where(eq(referralsTable.refereeTelegramId, refereeTelegramId));
+  // Capture the skip reason set inside the transaction callback before throwing,
+  // so we can log it OUTSIDE the transaction (and therefore persist it).
+  let skipReason: string | null = null;
+  let referrerBalanceBefore = 0;
+  let refereeBalanceBefore  = 0;
 
-  if (existing) {
-    logger.info(
-      { ...logCtx, existing_referrer: existing.referrerTelegramId, created_at: existing.createdAt },
-      "[REFERRAL] skipped — referral row already exists"
-    );
-    return { credited: false, reason: "duplicate_row_exists" };
-  }
-
-  // Guard: referrer must exist in DB
-  const [referrer] = await db
-    .select()
-    .from(usersTable)
-    .where(eq(usersTable.telegramId, referrerTelegramId));
-
-  if (!referrer) {
-    logger.info(logCtx, "[REFERRAL] skipped — referrer not found in DB");
-    return { credited: false, reason: "referrer_not_found" };
-  }
-
-  // Guard: referee must exist in DB (should always pass at call sites — they insert user first)
-  const [referee] = await db
-    .select()
-    .from(usersTable)
-    .where(eq(usersTable.telegramId, refereeTelegramId));
-
-  if (!referee) {
-    logger.info(logCtx, "[REFERRAL] skipped — referee not found in DB");
-    return { credited: false, reason: "referee_not_found" };
-  }
-
-  const referrerBalanceBefore = referrer.balance;
-  const refereeBalanceBefore = referee.balance;
-
-  // Snapshot referral count before insert (for logging only)
-  const referralCountBefore = (
-    await db
-      .select()
-      .from(referralsTable)
-      .where(eq(referralsTable.referrerTelegramId, referrerTelegramId))
-  ).length;
-
-  // Insert referral row.
-  // Wrapped in try-catch: if two concurrent calls race past the duplicate check above,
-  // the DB UNIQUE constraint on referee_telegram_id will reject the second insert.
   try {
-    await db.insert(referralsTable).values({
-      referrerTelegramId,
-      refereeTelegramId,
-      referrerHpEarned: REFERRER_REWARD,
-      refereeHpEarned: REFEREE_REWARD,
+    await db.transaction(async (tx) => {
+      // 1. Duplicate guard
+      const [existing] = await tx
+        .select({ id: referralsTable.id, referrerTelegramId: referralsTable.referrerTelegramId })
+        .from(referralsTable)
+        .where(eq(referralsTable.refereeTelegramId, refereeTelegramId));
+
+      if (existing) {
+        skipReason = "duplicate_row_exists";
+        throw new ReferralSkipError(skipReason);
+      }
+
+      // 2. Referrer must exist in DB
+      const [referrer] = await tx
+        .select({ telegramId: usersTable.telegramId, balance: usersTable.balance, streak: usersTable.streak, totalMines: usersTable.totalMines })
+        .from(usersTable)
+        .where(eq(usersTable.telegramId, referrerTelegramId));
+
+      if (!referrer) {
+        skipReason = "referrer_not_found";
+        throw new ReferralSkipError(skipReason);
+      }
+      referrerBalanceBefore = referrer.balance;
+
+      // 3. Referee must exist in DB
+      const [referee] = await tx
+        .select({ telegramId: usersTable.telegramId, balance: usersTable.balance })
+        .from(usersTable)
+        .where(eq(usersTable.telegramId, refereeTelegramId));
+
+      if (!referee) {
+        skipReason = "referee_not_found";
+        throw new ReferralSkipError(skipReason);
+      }
+      refereeBalanceBefore = referee.balance;
+
+      // 4. Insert referral row (unique constraint is the DB-level backstop for races)
+      await tx.insert(referralsTable).values({
+        referrerTelegramId,
+        refereeTelegramId,
+        referrerHpEarned: REFERRER_REWARD,
+        refereeHpEarned: REFEREE_REWARD,
+      });
+
+      // 5 & 6. Credit balances — atomic SQL increments avoid read-modify-write races
+      await tx
+        .update(usersTable)
+        .set({ balance: sql`${usersTable.balance} + ${REFERRER_REWARD}` })
+        .where(eq(usersTable.telegramId, referrerTelegramId));
+
+      await tx
+        .update(usersTable)
+        .set({ balance: sql`${usersTable.balance} + ${REFEREE_REWARD}` })
+        .where(eq(usersTable.telegramId, refereeTelegramId));
     });
-  } catch (insertErr: any) {
-    const isUniqueViolation =
-      insertErr?.code === "23505" ||
-      String(insertErr?.message ?? "").includes("unique") ||
-      String(insertErr?.detail ?? "").includes("already exists");
-    if (isUniqueViolation) {
-      logger.warn(logCtx, "[REFERRAL] DB unique constraint caught concurrent insert — skipping (race condition)");
+  } catch (err: any) {
+    // ── Skip (non-exceptional) ────────────────────────────────────────────────
+    if (err instanceof ReferralSkipError) {
+      const reason = skipReason!;
+      const step =
+        reason === "duplicate_row_exists" ? "duplicate_referral"
+        : reason === "referrer_not_found" ? "missing_referrer"
+        : "rejected";
+      logger.info({ ...logCtx, reason }, `[REFERRAL] skipped — ${reason}`);
+      await logReferralEvent({ referrerTelegramId, refereeTelegramId, step, result: "skipped", message: reason, source });
+      return { credited: false, reason };
+    }
+
+    // ── Concurrent race caught at DB level ────────────────────────────────────
+    // Drizzle wraps the PG error in a "Failed query: ..." message; the original
+    // PG error (code "23505") may be nested inside err.cause. Walk the chain.
+    const isUniqueViolation = (e: any): boolean => {
+      if (!e) return false;
+      if (e.code === "23505") return true;
+      const msg = String(e.message ?? "").toLowerCase();
+      if (msg.includes("unique") || msg.includes("duplicate key")) return true;
+      const detail = String(e.detail ?? "").toLowerCase();
+      if (detail.includes("already exists")) return true;
+      return isUniqueViolation(e.cause);
+    };
+
+    if (isUniqueViolation(err)) {
+      logger.warn(logCtx, "[REFERRAL] DB unique constraint — concurrent race condition");
+      await logReferralEvent({
+        referrerTelegramId,
+        refereeTelegramId,
+        step: "duplicate_referral",
+        result: "skipped",
+        message: "race_condition_duplicate — DB unique constraint fired",
+        source,
+      });
       return { credited: false, reason: "race_condition_duplicate" };
     }
-    throw insertErr;
+
+    // ── Unexpected error ──────────────────────────────────────────────────────
+    logger.error({ ...logCtx, err }, "[REFERRAL] unexpected error in transaction");
+    await logReferralEvent({
+      referrerTelegramId,
+      refereeTelegramId,
+      step: "rejected",
+      result: "failed",
+      message: String(err?.message ?? err),
+      source,
+    });
+    throw err;
   }
 
-  // Credit referrer — atomic SQL increment prevents read-modify-write races
-  await db
-    .update(usersTable)
-    .set({ balance: sql`${usersTable.balance} + ${REFERRER_REWARD}` })
-    .where(eq(usersTable.telegramId, referrerTelegramId));
-
-  // Credit referee — atomic SQL increment
-  await db
-    .update(usersTable)
-    .set({ balance: sql`${usersTable.balance} + ${REFEREE_REWARD}` })
-    .where(eq(usersTable.telegramId, refereeTelegramId));
-
-  const referralCountAfter = referralCountBefore + 1;
-
+  // ── Transaction committed ─────────────────────────────────────────────────
   logger.info(
     {
-      referrer_id: referrerTelegramId,
-      referee_id: refereeTelegramId,
-      referral_row_inserted: true,
+      referrer: referrerTelegramId,
+      referee: refereeTelegramId,
       referrer_balance_before: referrerBalanceBefore,
       referrer_balance_after: referrerBalanceBefore + REFERRER_REWARD,
       referee_balance_before: refereeBalanceBefore,
       referee_balance_after: refereeBalanceBefore + REFEREE_REWARD,
-      referral_count_before: referralCountBefore,
-      referral_count_after: referralCountAfter,
-      referrer_reward: REFERRER_REWARD,
-      referee_reward: REFEREE_REWARD,
+      source,
     },
-    "[REFERRAL] ✅ referral credited — balances incremented atomically — referral count updated"
+    "[REFERRAL] ✅ credited — balances updated atomically in transaction"
   );
-
-  // Side-effects: quest progress and achievements for referrer
-  await updateQuestProgress(referrerTelegramId, "invite_friend");
-  await checkAndUnlockAchievements(
+  await logReferralEvent({
     referrerTelegramId,
-    referrerBalanceBefore + REFERRER_REWARD,
-    referrer.streak,
-    referrer.totalMines,
-    referralCountAfter,
-    null
-  );
+    refereeTelegramId,
+    step: "completed",
+    result: "success",
+    message: `referrer +${REFERRER_REWARD} HC, referee +${REFEREE_REWARD} HC`,
+    source,
+  });
+
+  // ── Side effects (outside transaction — non-critical) ─────────────────────
+  try {
+    const referralCount = (
+      await db.select({ id: referralsTable.id })
+        .from(referralsTable)
+        .where(eq(referralsTable.referrerTelegramId, referrerTelegramId))
+    ).length;
+    const [updatedReferrer] = await db.select().from(usersTable).where(eq(usersTable.telegramId, referrerTelegramId));
+    if (updatedReferrer) {
+      await updateQuestProgress(referrerTelegramId, "invite_friend");
+      await checkAndUnlockAchievements(
+        referrerTelegramId,
+        updatedReferrer.balance,
+        updatedReferrer.streak,
+        updatedReferrer.totalMines,
+        referralCount,
+        null,
+      );
+    }
+  } catch (sideErr) {
+    logger.error({ ...logCtx, err: sideErr }, "[REFERRAL] side-effect error (non-fatal)");
+  }
 
   return { credited: true };
 }
