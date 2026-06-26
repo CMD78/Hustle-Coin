@@ -375,7 +375,7 @@ function UserProfileModal({
   );
 }
 
-type Tab = "dashboard" | "users" | "tasks" | "broadcast" | "recent" | "telegram" | "announce" | "deploy";
+type Tab = "dashboard" | "users" | "tasks" | "broadcast" | "recent" | "telegram" | "announce" | "deploy" | "referral";
 
 interface Announcement {
   id: number;
@@ -412,6 +412,14 @@ export default function Admin() {
   const [userDetailsLoading, setUserDetailsLoading] = useState(false);
   const [sortBy, setSortBy] = useState<"newest" | "balance" | "referrals">("newest");
   const [usersPage, setUsersPage] = useState(0);
+
+  const [repairReferrer, setRepairReferrer] = useState("");
+  const [repairReferee, setRepairReferee] = useState("");
+  const [repairLoading, setRepairLoading] = useState(false);
+  const [repairResult, setRepairResult] = useState<any | null>(null);
+  const [debugTarget, setDebugTarget] = useState("");
+  const [debugLoading, setDebugLoading] = useState(false);
+  const [debugResult, setDebugResult] = useState<any | null>(null);
 
   const isAdmin = telegramId === ADMIN_ID;
   const { data: stats } = useGetAdminStats({ telegramId }, { query: { enabled: isAdmin } as any });
@@ -607,6 +615,42 @@ export default function Admin() {
 
   const today = () => new Date().toISOString().split("T")[0];
 
+  const handleRepairReferral = async () => {
+    if (!repairReferrer.trim() || !repairReferee.trim()) return;
+    setRepairLoading(true);
+    setRepairResult(null);
+    try {
+      const r = await fetch("/api/admin/repair-referral", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ adminTelegramId: telegramId, referrerTelegramId: repairReferrer.trim(), refereeTelegramId: repairReferee.trim() }),
+      });
+      const data = await r.json();
+      setRepairResult({ ok: r.ok, ...data });
+      if (r.ok) toast({ title: "Referral repaired!", description: `+500 HC → ${repairReferrer}, +250 HC → ${repairReferee}` });
+      else toast({ title: "Repair failed", description: data.error, variant: "destructive" });
+    } catch {
+      setRepairResult({ ok: false, error: "Network error" });
+    } finally {
+      setRepairLoading(false);
+    }
+  };
+
+  const handleReferralDebug = async () => {
+    if (!debugTarget.trim()) return;
+    setDebugLoading(true);
+    setDebugResult(null);
+    try {
+      const r = await fetch(`/api/admin/referral-debug/${encodeURIComponent(debugTarget.trim())}?telegramId=${encodeURIComponent(telegramId)}`);
+      const data = await r.json();
+      setDebugResult(data);
+    } catch {
+      setDebugResult({ error: "Network error" });
+    } finally {
+      setDebugLoading(false);
+    }
+  };
+
   const navTabs: { id: Tab; label: string }[] = [
     { id: "dashboard", label: "Stats" },
     { id: "users", label: "Users" },
@@ -615,6 +659,7 @@ export default function Admin() {
     { id: "broadcast", label: "Send" },
     { id: "recent", label: "Recent" },
     { id: "telegram", label: "Bot" },
+    { id: "referral", label: "Referral" },
     { id: "deploy", label: "Deploy" },
   ];
 
@@ -1047,6 +1092,146 @@ export default function Admin() {
               </Link>
             </>
           )}
+        </div>
+      )}
+
+      {tab === "referral" && (
+        <div className="space-y-4">
+
+          {/* ── Repair Referral ─────────────────────────────────────── */}
+          <div className="bg-card border border-border rounded-2xl p-4 space-y-3">
+            <h3 className="font-bold text-sm flex items-center gap-2">
+              <RefreshCw className="w-4 h-4 text-green-400" /> Repair Referral
+            </h3>
+            <p className="text-xs text-muted-foreground">Credit a missed referral. Both users must already exist.</p>
+            <input
+              value={repairReferrer}
+              onChange={e => setRepairReferrer(e.target.value)}
+              placeholder="Referrer Telegram ID"
+              className="w-full bg-muted border border-border rounded-xl px-3 py-2 text-sm font-mono"
+            />
+            <input
+              value={repairReferee}
+              onChange={e => setRepairReferee(e.target.value)}
+              placeholder="Referee Telegram ID (user who was referred)"
+              className="w-full bg-muted border border-border rounded-xl px-3 py-2 text-sm font-mono"
+            />
+            <button
+              onClick={handleRepairReferral}
+              disabled={repairLoading || !repairReferrer.trim() || !repairReferee.trim()}
+              className="w-full py-2.5 bg-green-500/20 text-green-400 border border-green-500/30 rounded-xl text-sm font-bold hover:bg-green-500/30 transition-colors disabled:opacity-50"
+            >
+              {repairLoading ? "Processing..." : "Credit Referral (+500 HC referrer, +250 HC referee)"}
+            </button>
+            {repairResult && (
+              <div className={`rounded-xl p-3 text-xs font-mono space-y-1 ${repairResult.ok ? "bg-green-500/10 border border-green-500/20 text-green-300" : "bg-red-500/10 border border-red-500/20 text-red-300"}`}>
+                {repairResult.ok ? (
+                  <>
+                    <p className="font-bold text-green-400">✓ Referral credited</p>
+                    {repairResult.referrerNewBalance !== undefined && <p>Referrer balance: {repairResult.referrerNewBalance.toLocaleString()} HC</p>}
+                    {repairResult.refereeNewBalance !== undefined && <p>Referee balance: {repairResult.refereeNewBalance.toLocaleString()} HC</p>}
+                  </>
+                ) : (
+                  <p className="font-bold">✗ {repairResult.error ?? "Unknown error"}</p>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* ── Referral Debug ──────────────────────────────────────── */}
+          <div className="bg-card border border-border rounded-2xl p-4 space-y-3">
+            <h3 className="font-bold text-sm flex items-center gap-2">
+              <Search className="w-4 h-4 text-blue-400" /> Referral Debug
+            </h3>
+            <p className="text-xs text-muted-foreground">Inspect a user's full referral status and event log.</p>
+            <div className="flex gap-2">
+              <input
+                value={debugTarget}
+                onChange={e => setDebugTarget(e.target.value)}
+                onKeyDown={e => e.key === "Enter" && handleReferralDebug()}
+                placeholder="Telegram ID to inspect"
+                className="flex-1 bg-muted border border-border rounded-xl px-3 py-2 text-sm font-mono"
+              />
+              <button
+                onClick={handleReferralDebug}
+                disabled={debugLoading || !debugTarget.trim()}
+                className="px-4 py-2 bg-blue-500/20 text-blue-400 border border-blue-500/30 rounded-xl text-sm font-bold hover:bg-blue-500/30 transition-colors disabled:opacity-50"
+              >
+                {debugLoading ? "..." : "Inspect"}
+              </button>
+            </div>
+
+            {debugResult && !debugResult.error && (
+              <div className="space-y-3">
+                {/* Diagnostic answers */}
+                <div className="space-y-1.5">
+                  {[
+                    { label: "Link received?", ok: debugResult.diagnostics?.link_received, detail: debugResult.diagnostics?.link_received ? "Yes — link_opened event found" : "No — no link_opened event" },
+                    { label: "referredBy stored?", ok: debugResult.diagnostics?.referred_by_stored, detail: debugResult.user_record?.referred_by ? `Stored: ${debugResult.user_record.referred_by}` : "Not stored" },
+                    { label: "Referral row exists?", ok: debugResult.diagnostics?.referral_row_exists, detail: debugResult.diagnostics?.referral_row_exists ? `Row created` : "No row in referrals table" },
+                    { label: "Referee rewarded?", ok: debugResult.diagnostics?.referee_rewarded, detail: debugResult.diagnostics?.referee_rewarded ? `+${debugResult.referral_as_referee?.row?.referee_hp_earned ?? 250} HC` : "Not credited" },
+                    { label: "Referrer rewarded?", ok: debugResult.diagnostics?.referrer_rewarded, detail: debugResult.diagnostics?.referrer_rewarded ? `+${debugResult.referral_as_referee?.row?.referrer_hp_earned ?? 500} HC` : "Not credited" },
+                    { label: "Duplicate detected?", ok: !debugResult.diagnostics?.duplicate_detected, detail: debugResult.diagnostics?.duplicate_detected ? "Duplicate event found" : "No duplicate" },
+                  ].map(d => (
+                    <div key={d.label} className={`flex items-center gap-3 p-2.5 rounded-xl border ${d.ok ? "border-green-500/20 bg-green-500/5" : "border-amber-500/20 bg-amber-500/5"}`}>
+                      <div className={`w-2 h-2 rounded-full shrink-0 ${d.ok ? "bg-green-500" : "bg-amber-500"}`} />
+                      <div className="flex-1">
+                        <p className="text-xs font-semibold">{d.label}</p>
+                        <p className="text-[10px] text-muted-foreground">{d.detail}</p>
+                      </div>
+                      <span className={`text-[10px] font-bold ${d.ok ? "text-green-400" : "text-amber-400"}`}>{d.ok ? "YES" : "NO"}</span>
+                    </div>
+                  ))}
+                </div>
+
+                {/* User summary */}
+                <div className="bg-muted/40 rounded-xl p-3 space-y-1 text-xs">
+                  <p className="font-semibold text-muted-foreground uppercase tracking-wider text-[10px]">User Record</p>
+                  <div className="flex justify-between"><span className="text-muted-foreground">Balance</span><span className="font-mono font-bold">{(debugResult.user_record?.balance ?? 0).toLocaleString()} HC</span></div>
+                  <div className="flex justify-between"><span className="text-muted-foreground">Referred by</span><span className="font-mono">{debugResult.user_record?.referred_by ?? "—"}</span></div>
+                  <div className="flex justify-between"><span className="text-muted-foreground">Referrals made</span><span className="font-mono">{(debugResult.referrals_as_referrer ?? []).length}</span></div>
+                  {debugResult.diagnostics?.failure_reason && (
+                    <div className="flex justify-between"><span className="text-muted-foreground">Failure reason</span><span className="font-mono text-red-400">{debugResult.diagnostics.failure_reason}</span></div>
+                  )}
+                </div>
+
+                {/* Referral events */}
+                {(debugResult.referral_events ?? []).length > 0 && (
+                  <div className="space-y-1">
+                    <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wider">Event Log ({debugResult.referral_events.length})</p>
+                    <div className="max-h-64 overflow-y-auto space-y-1.5">
+                      {debugResult.referral_events.map((ev: any, i: number) => (
+                        <div key={i} className="bg-muted/50 border border-border rounded-lg px-3 py-2 text-xs">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className={`font-bold font-mono ${ev.result === "credited" ? "text-green-400" : ev.result === "skipped" ? "text-amber-400" : "text-blue-400"}`}>
+                              {ev.step}
+                            </span>
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold ${ev.result === "credited" ? "bg-green-500/20 text-green-400" : ev.result === "skipped" ? "bg-amber-500/20 text-amber-400" : "bg-blue-500/20 text-blue-400"}`}>
+                              {ev.result}
+                            </span>
+                          </div>
+                          {ev.message && <p className="text-muted-foreground mt-0.5">{ev.message}</p>}
+                          {ev.referrer_telegram_id && <p className="text-muted-foreground text-[10px]">referrer: {ev.referrer_telegram_id}</p>}
+                          <p className="text-muted-foreground text-[10px] mt-0.5">{new Date(ev.created_at).toLocaleString()}</p>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {(debugResult.referral_events ?? []).length === 0 && (
+                  <p className="text-xs text-muted-foreground text-center py-2">No referral events logged for this user</p>
+                )}
+              </div>
+            )}
+
+            {debugResult?.error && (
+              <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-3 text-xs text-red-300">
+                ✗ {debugResult.error}
+              </div>
+            )}
+          </div>
+
         </div>
       )}
 
