@@ -15,6 +15,7 @@ import walletRouter from "./wallet";
 import telegramRouter from "./telegram";
 import announcementsRouter from "./announcements";
 import settingsRouter from "./settings";
+import notificationsRouter from "./notifications";
 
 const router: IRouter = Router();
 
@@ -34,5 +35,6 @@ router.use(walletRouter);
 router.use(telegramRouter);
 router.use(announcementsRouter);
 router.use(settingsRouter);
+router.use(notificationsRouter);
 
 export default router;

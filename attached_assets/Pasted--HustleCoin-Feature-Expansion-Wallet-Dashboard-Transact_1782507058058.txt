@@ -1,0 +1,308 @@
+# HustleCoin Feature Expansion — Wallet Dashboard + Transaction History + Notification System
+
+Before writing any code, inspect the entire current codebase (frontend, backend, database schema, API routes, wallet, mining, referrals, admin panel, achievements, tasks, and Telegram integration). Understand the architecture completely before making any changes.
+
+## CRITICAL REQUIREMENTS
+
+Do NOT rewrite or break any existing functionality.
+
+Preserve completely:
+
+- Referral system
+- Mining system
+- Wallet balance calculation
+- Tasks
+- Achievements
+- Leaderboard
+- Admin panel
+- Telegram authentication
+- Community challenge system
+- Existing APIs
+
+This is a feature expansion, not a redesign.
+
+---
+
+# FEATURE 1 — PROFESSIONAL WALLET DASHBOARD
+
+Redesign the Wallet page into a professional dashboard.
+
+Display:
+
+- Current HC Balance
+- Total HC Earned
+- Total HC Spent
+- Lifetime Earnings
+- Lifetime Rewards
+- Referral Earnings
+- Mining Earnings
+- Challenge Earnings
+- Achievement Earnings
+- Admin Bonus Earnings
+
+Add clean animated cards.
+
+---
+
+# FEATURE 2 — COMPLETE TRANSACTION HISTORY
+
+Create a permanent transaction history.
+
+Every HC movement must generate a transaction.
+
+Examples:
+
+Mining Reward
+
+Referral Reward
+
+Challenge Reward
+
+Achievement Reward
+
+Admin Bonus
+
+Wallet Adjustment
+
+Future Marketplace Purchase
+
+Future Transfer
+
+Each transaction should store:
+
+- transaction_id
+- telegram_id
+- type
+- amount
+- balance_before
+- balance_after
+- description
+- created_at
+
+Newest first.
+
+Support pagination.
+
+Support filtering by transaction type.
+
+Support searching.
+
+---
+
+# FEATURE 3 — NOTIFICATION SYSTEM
+
+Create a complete notification system.
+
+Database:
+
+notifications table
+
+Fields:
+
+id
+
+telegram_id
+
+title
+
+message
+
+type
+
+read
+
+created_at
+
+related_entity
+
+Every important activity should create a notification automatically.
+
+Examples:
+
+Mining Ready
+
+New Task
+
+Referral Reward
+
+Referral Joined
+
+Challenge Winner
+
+Achievement Unlocked
+
+Admin Announcement
+
+Weekly Summary
+
+Wallet Credit
+
+Wallet Adjustment
+
+Future Marketplace Updates
+
+---
+
+# FEATURE 4 — NOTIFICATION CENTER
+
+Create an in-app notification center.
+
+Display:
+
+Unread count
+
+Read/Unread badges
+
+Newest first
+
+Mark as Read
+
+Mark All as Read
+
+Delete notification
+
+Notification history
+
+Beautiful mobile-friendly UI.
+
+---
+
+# FEATURE 5 — NOTIFICATION SETTINGS
+
+Allow users to enable/disable notifications individually.
+
+Options:
+
+Mining Reminder
+
+Task Reminder
+
+Referral Rewards
+
+Challenge Alerts
+
+Achievement Alerts
+
+Announcements
+
+Weekly Summary
+
+Save preferences per user.
+
+---
+
+# FEATURE 6 — AUTOMATIC REMINDERS
+
+Create automatic reminder jobs.
+
+Mining:
+
+Notify immediately when mining cooldown finishes.
+
+Tasks:
+
+Notify when new tasks are published.
+
+Challenge:
+
+Notify users 30 minutes before the daily challenge starts.
+
+Weekly Summary:
+
+Every Sunday send summary notification.
+
+Only send reminders if enabled in user settings.
+
+---
+
+# FEATURE 7 — ADMIN PANEL
+
+Add new admin sections.
+
+Wallet Management
+
+View any user's wallet.
+
+View transaction history.
+
+Adjust balance.
+
+Reason required.
+
+Creates transaction record automatically.
+
+Notification Management
+
+Send notification to:
+
+Single User
+
+Multiple Users
+
+Everyone
+
+Schedule future notifications.
+
+View notification logs.
+
+---
+
+# FEATURE 8 — SECURITY
+
+Use database transactions where necessary.
+
+Never allow balances to become inconsistent.
+
+Every balance change MUST create a transaction history record.
+
+Never lose notification records.
+
+---
+
+# FEATURE 9 — PERFORMANCE
+
+Paginate large transaction lists.
+
+Paginate notification lists.
+
+Optimize database queries.
+
+Avoid unnecessary API calls.
+
+Keep mobile performance smooth.
+
+---
+
+# FEATURE 10 — TESTING
+
+After implementation, verify:
+
+✓ Mining still works
+
+✓ Referrals still work
+
+✓ Wallet balance remains correct
+
+✓ Every reward creates a transaction
+
+✓ Every reward creates a notification
+
+✓ Notification center works
+
+✓ Admin wallet tools work
+
+✓ Admin notification tools work
+
+✓ No existing features are broken
+
+Finally provide a detailed implementation report describing:
+
+- New database tables
+- New API endpoints
+- New admin features
+- New frontend pages
+- Files modified
+- Test results
+- Any migration steps required
+
+Do not remove or redesign existing HustleCoin features. Extend the current project while maintaining full backward compatibility.

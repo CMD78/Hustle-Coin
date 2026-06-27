@@ -2,7 +2,7 @@ import { Router, type IRouter } from "express";
 import { db, usersTable, miningLogsTable, referralsTable } from "@workspace/db";
 import { eq, desc, sql } from "drizzle-orm";
 import { MineHpBody, MineHpResponse, GetMineHistoryQueryParams, GetMineHistoryResponse } from "@workspace/api-zod";
-import { getLevel, getStreakBonus, canMine, getMineCountdown, checkAndUnlockAchievements, updateQuestProgress, BASE_MINE_HP } from "../lib/hustlecoin";
+import { getLevel, getStreakBonus, canMine, getMineCountdown, checkAndUnlockAchievements, updateQuestProgress, BASE_MINE_HP, recordTransaction } from "../lib/hustlecoin";
 
 const router: IRouter = Router();
 
@@ -49,7 +49,8 @@ router.post("/mine", async (req, res): Promise<void> => {
   const baseHp = BASE_MINE_HP;
   const bonusHp = getStreakBonus(newStreak);
   const totalHp = baseHp + bonusHp;
-  const newBalance = user.balance + totalHp;
+  const balanceBefore = user.balance;
+  const newBalance = balanceBefore + totalHp;
 
   await db.update(usersTable).set({
     balance: newBalance,
@@ -60,7 +61,19 @@ router.post("/mine", async (req, res): Promise<void> => {
     lastActive: now,
   }).where(eq(usersTable.telegramId, telegramId));
 
-  await db.insert(miningLogsTable).values({ telegramId, hpEarned: baseHp, bonusHp, streak: newStreak });
+  const [mineLog] = await db.insert(miningLogsTable)
+    .values({ telegramId, hpEarned: baseHp, bonusHp, streak: newStreak })
+    .returning();
+
+  await recordTransaction({
+    telegramId,
+    type: "mining",
+    amount: totalHp,
+    balanceBefore,
+    balanceAfter: newBalance,
+    description: `Daily mining reward${bonusHp > 0 ? ` (+${bonusHp} HC streak bonus, day ${newStreak})` : ""}`,
+    relatedId: mineLog ? String(mineLog.id) : null,
+  });
 
   await updateQuestProgress(telegramId, "mine");
 

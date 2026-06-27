@@ -8,7 +8,7 @@ import {
   BroadcastMessageBody, BroadcastMessageResponse,
   GetAdminFeedbackQueryParams, GetAdminFeedbackResponse,
 } from "@workspace/api-zod";
-import { ADMIN_TELEGRAM_ID, getLevel, processReferral, REFERRER_REWARD, REFEREE_REWARD } from "../lib/hustlecoin";
+import { ADMIN_TELEGRAM_ID, getLevel, processReferral, REFERRER_REWARD, REFEREE_REWARD, recordTransaction, createNotification } from "../lib/hustlecoin";
 
 const router: IRouter = Router();
 
@@ -258,6 +258,8 @@ router.post("/admin/grant-hp", async (req, res): Promise<void> => {
   const newBalance = Math.max(0, user.balance + amount);
   await db.update(usersTable).set({ balance: newBalance, level: getLevel(newBalance) }).where(eq(usersTable.telegramId, targetTelegramId));
   await db.insert(adminLogsTable).values({ adminTelegramId, action: amount >= 0 ? "grant_hp" : "remove_hp", targetTelegramId, details: `${amount} HC — ${reason}` });
+  await recordTransaction({ telegramId: targetTelegramId, type: amount >= 0 ? "admin_grant" : "admin_deduction", amount, balanceBefore: user.balance, balanceAfter: newBalance, description: `Admin ${amount >= 0 ? "grant" : "deduction"}: ${reason}`, relatedId: adminTelegramId });
+  await createNotification({ telegramId: targetTelegramId, title: amount >= 0 ? "HC Credited! 💰" : "HC Adjusted", message: `${Math.abs(amount)} HC ${amount >= 0 ? "added to" : "removed from"} your wallet. Reason: ${reason}`, type: amount >= 0 ? "wallet_credit" : "wallet_adjustment" });
 
   const [updated] = await db.select().from(usersTable).where(eq(usersTable.telegramId, targetTelegramId));
 

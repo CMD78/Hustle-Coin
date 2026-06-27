@@ -1,4 +1,4 @@
-import { db, usersTable, referralsTable, achievementsTable, achievementUnlocksTable, questProgressTable, questsTable, referralEventsTable } from "@workspace/db";
+import { db, usersTable, referralsTable, achievementsTable, achievementUnlocksTable, questProgressTable, questsTable, referralEventsTable, transactionsTable, notificationsTable } from "@workspace/db";
 import { eq, and, sql } from "drizzle-orm";
 import { logger } from "./logger";
 
@@ -57,10 +57,55 @@ export function getBadges(user: { referralCount: number; streak: number; balance
   return badges;
 }
 
+// ── Transaction Recorder ──────────────────────────────────────────────────────
+// Best-effort: never throws. Called outside transactions to always persist.
+export async function recordTransaction(tx: {
+  telegramId: string;
+  type: string;
+  amount: number;
+  balanceBefore: number;
+  balanceAfter: number;
+  description: string;
+  relatedId?: string | null;
+}): Promise<void> {
+  try {
+    await db.insert(transactionsTable).values({
+      telegramId: tx.telegramId,
+      type: tx.type,
+      amount: tx.amount,
+      balanceBefore: tx.balanceBefore,
+      balanceAfter: tx.balanceAfter,
+      description: tx.description,
+      relatedId: tx.relatedId ?? null,
+    });
+  } catch (err) {
+    logger.error({ err, tx }, "[TRANSACTION] failed to record (non-fatal)");
+  }
+}
+
+// ── Notification Creator ──────────────────────────────────────────────────────
+// Best-effort: never throws.
+export async function createNotification(notif: {
+  telegramId: string;
+  title: string;
+  message: string;
+  type: string;
+  relatedEntity?: string | null;
+}): Promise<void> {
+  try {
+    await db.insert(notificationsTable).values({
+      telegramId: notif.telegramId,
+      title: notif.title,
+      message: notif.message,
+      type: notif.type,
+      relatedEntity: notif.relatedEntity ?? null,
+    });
+  } catch (err) {
+    logger.error({ err, notif }, "[NOTIFICATION] failed to create (non-fatal)");
+  }
+}
+
 // ── Referral Event Logger ─────────────────────────────────────────────────────
-// Writes an audit entry to referral_events. Never throws — event logging must
-// not disrupt the main request flow. Always called OUTSIDE a db.transaction()
-// callback so records persist even if the surrounding transaction rolls back.
 export async function logReferralEvent(event: {
   referrerTelegramId?: string | null;
   refereeTelegramId: string;
@@ -91,26 +136,6 @@ class ReferralSkipError extends Error {
 }
 
 // ── Centralized Referral Processor ───────────────────────────────────────────
-// Single source of truth for all referral reward logic.
-//
-// All critical DB operations are wrapped in one atomic db.transaction():
-//   1. Duplicate check       }
-//   2. Referrer existence    } — reads + writes inside one transaction
-//   3. Referee existence     }
-//   4. Insert referral row   }  ← DB UNIQUE constraint = hard backstop
-//   5. Credit referrer (+500)}
-//   6. Credit referee (+250) }
-//
-// Event logging happens OUTSIDE the transaction so events survive rollbacks.
-// Side effects (quests, achievements) run after the transaction commits.
-//
-// source: identifies the call site for the audit log.
-//   "init"             — /api/init (new user primary path)
-//   "init_second_pass" — /api/init (existing user retry)
-//   "webhook"          — Telegram /start command (new user)
-//   "telegram_start"   — /telegram/start endpoint (new user)
-//   "admin_repair"     — POST /api/admin/repair-referral
-// ─────────────────────────────────────────────────────────────────────────────
 export async function processReferral(
   refereeTelegramId: string,
   referrerTelegramId: string,
@@ -118,7 +143,6 @@ export async function processReferral(
 ): Promise<{ credited: boolean; reason?: string }> {
   const logCtx = { refereeTelegramId, referrerTelegramId, source };
 
-  // Pre-transaction guard: self or missing IDs (no DB read needed)
   if (!referrerTelegramId || !refereeTelegramId || referrerTelegramId === refereeTelegramId) {
     logger.info(logCtx, "[REFERRAL] skipped — invalid or self-referral");
     await logReferralEvent({
@@ -132,15 +156,12 @@ export async function processReferral(
     return { credited: false, reason: "invalid_or_self_referral" };
   }
 
-  // Capture the skip reason set inside the transaction callback before throwing,
-  // so we can log it OUTSIDE the transaction (and therefore persist it).
   let skipReason: string | null = null;
   let referrerBalanceBefore = 0;
   let refereeBalanceBefore  = 0;
 
   try {
     await db.transaction(async (tx) => {
-      // 1. Duplicate guard
       const [existing] = await tx
         .select({ id: referralsTable.id, referrerTelegramId: referralsTable.referrerTelegramId })
         .from(referralsTable)
@@ -151,7 +172,6 @@ export async function processReferral(
         throw new ReferralSkipError(skipReason);
       }
 
-      // 2. Referrer must exist in DB
       const [referrer] = await tx
         .select({ telegramId: usersTable.telegramId, balance: usersTable.balance, streak: usersTable.streak, totalMines: usersTable.totalMines })
         .from(usersTable)
@@ -163,7 +183,6 @@ export async function processReferral(
       }
       referrerBalanceBefore = referrer.balance;
 
-      // 3. Referee must exist in DB
       const [referee] = await tx
         .select({ telegramId: usersTable.telegramId, balance: usersTable.balance })
         .from(usersTable)
@@ -175,7 +194,6 @@ export async function processReferral(
       }
       refereeBalanceBefore = referee.balance;
 
-      // 4. Insert referral row (unique constraint is the DB-level backstop for races)
       await tx.insert(referralsTable).values({
         referrerTelegramId,
         refereeTelegramId,
@@ -183,7 +201,6 @@ export async function processReferral(
         refereeHpEarned: REFEREE_REWARD,
       });
 
-      // 5 & 6. Credit balances — atomic SQL increments avoid read-modify-write races
       await tx
         .update(usersTable)
         .set({ balance: sql`${usersTable.balance} + ${REFERRER_REWARD}` })
@@ -195,7 +212,6 @@ export async function processReferral(
         .where(eq(usersTable.telegramId, refereeTelegramId));
     });
   } catch (err: any) {
-    // ── Skip (non-exceptional) ────────────────────────────────────────────────
     if (err instanceof ReferralSkipError) {
       const reason = skipReason!;
       const step =
@@ -207,9 +223,6 @@ export async function processReferral(
       return { credited: false, reason };
     }
 
-    // ── Concurrent race caught at DB level ────────────────────────────────────
-    // Drizzle wraps the PG error in a "Failed query: ..." message; the original
-    // PG error (code "23505") may be nested inside err.cause. Walk the chain.
     const isUniqueViolation = (e: any): boolean => {
       if (!e) return false;
       if (e.code === "23505") return true;
@@ -233,7 +246,6 @@ export async function processReferral(
       return { credited: false, reason: "race_condition_duplicate" };
     }
 
-    // ── Unexpected error ──────────────────────────────────────────────────────
     logger.error({ ...logCtx, err }, "[REFERRAL] unexpected error in transaction");
     await logReferralEvent({
       referrerTelegramId,
@@ -246,7 +258,7 @@ export async function processReferral(
     throw err;
   }
 
-  // ── Transaction committed ─────────────────────────────────────────────────
+  // ── Transaction committed — record side effects outside the transaction ────
   logger.info(
     {
       referrer: referrerTelegramId,
@@ -268,7 +280,43 @@ export async function processReferral(
     source,
   });
 
-  // ── Side effects (outside transaction — non-critical) ─────────────────────
+  await recordTransaction({
+    telegramId: referrerTelegramId,
+    type: "referral_reward",
+    amount: REFERRER_REWARD,
+    balanceBefore: referrerBalanceBefore,
+    balanceAfter: referrerBalanceBefore + REFERRER_REWARD,
+    description: `Referral reward — invited user`,
+    relatedId: refereeTelegramId,
+  });
+
+  await recordTransaction({
+    telegramId: refereeTelegramId,
+    type: "referral_bonus",
+    amount: REFEREE_REWARD,
+    balanceBefore: refereeBalanceBefore,
+    balanceAfter: refereeBalanceBefore + REFEREE_REWARD,
+    description: `Referral bonus — joined via referral link`,
+    relatedId: referrerTelegramId,
+  });
+
+  await createNotification({
+    telegramId: referrerTelegramId,
+    title: "Referral Reward! 🎉",
+    message: `You earned +${REFERRER_REWARD} HC for inviting a new user to HustleCoin!`,
+    type: "referral_reward",
+    relatedEntity: refereeTelegramId,
+  });
+
+  await createNotification({
+    telegramId: refereeTelegramId,
+    title: "Welcome Bonus! 🎁",
+    message: `You earned +${REFEREE_REWARD} HC for joining via a referral link.`,
+    type: "referral_joined",
+    relatedEntity: referrerTelegramId,
+  });
+
+  // ── Side effects (non-critical) ───────────────────────────────────────────
   try {
     const referralCount = (
       await db.select({ id: referralsTable.id })
@@ -349,6 +397,13 @@ export async function checkAndUnlockAchievements(
 
       if (shouldUnlock) {
         await db.insert(achievementUnlocksTable).values({ achievementId: achievement.id, telegramId });
+        await createNotification({
+          telegramId,
+          title: `Achievement Unlocked! 🏆`,
+          message: `You unlocked "${achievement.title}"${achievement.description ? ` — ${achievement.description}` : ""}`,
+          type: "achievement_unlocked",
+          relatedEntity: String(achievement.id),
+        });
       }
     }
   } catch (err) {
@@ -379,7 +434,17 @@ export async function updateQuestProgress(telegramId: string, questType: string)
         if (isComplete) {
           const [u] = await db.select().from(usersTable).where(eq(usersTable.telegramId, telegramId));
           if (u) {
-            await db.update(usersTable).set({ balance: u.balance + quest.reward }).where(eq(usersTable.telegramId, telegramId));
+            const newBal = u.balance + quest.reward;
+            await db.update(usersTable).set({ balance: newBal }).where(eq(usersTable.telegramId, telegramId));
+            await recordTransaction({
+              telegramId,
+              type: "quest_reward",
+              amount: quest.reward,
+              balanceBefore: u.balance,
+              balanceAfter: newBal,
+              description: `Quest reward — ${quest.title}`,
+              relatedId: String(quest.id),
+            });
           }
         }
       } else if (!existing.completed) {
@@ -392,7 +457,17 @@ export async function updateQuestProgress(telegramId: string, questType: string)
         if (isNowComplete) {
           const [u] = await db.select().from(usersTable).where(eq(usersTable.telegramId, telegramId));
           if (u) {
-            await db.update(usersTable).set({ balance: u.balance + quest.reward }).where(eq(usersTable.telegramId, telegramId));
+            const newBal = u.balance + quest.reward;
+            await db.update(usersTable).set({ balance: newBal }).where(eq(usersTable.telegramId, telegramId));
+            await recordTransaction({
+              telegramId,
+              type: "quest_reward",
+              amount: quest.reward,
+              balanceBefore: u.balance,
+              balanceAfter: newBal,
+              description: `Quest reward — ${quest.title}`,
+              relatedId: String(quest.id),
+            });
           }
         }
       }

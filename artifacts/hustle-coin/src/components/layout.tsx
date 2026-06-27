@@ -1,13 +1,34 @@
 import { Link, useLocation } from "wouter";
-import { Home, CheckSquare, Users, Trophy, User, ShieldCheck, Pickaxe } from "lucide-react";
+import { Home, CheckSquare, Users, Trophy, User, ShieldCheck, Pickaxe, Bell } from "lucide-react";
 import { useTelegram } from "@/lib/telegram";
+import { useEffect, useState } from "react";
 
 const ADMIN_ID = "7035629762";
+
+function useUnreadCount(telegramId: string | null) {
+  const [count, setCount] = useState(0);
+
+  useEffect(() => {
+    if (!telegramId) return;
+    const load = () => {
+      fetch(`/api/notifications/unread-count?telegramId=${encodeURIComponent(telegramId)}`)
+        .then(r => r.json())
+        .then(d => setCount(d.unread ?? 0))
+        .catch(() => {});
+    };
+    load();
+    const timer = setInterval(load, 60_000);
+    return () => clearInterval(timer);
+  }, [telegramId]);
+
+  return count;
+}
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   const [location] = useLocation();
   const { telegramId } = useTelegram();
   const isAdmin = telegramId === ADMIN_ID;
+  const unreadCount = useUnreadCount(telegramId);
 
   const tabs = [
     { href: "/", icon: Home, label: "Home" },
@@ -21,7 +42,22 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="flex flex-col min-h-[100dvh] max-w-[430px] mx-auto bg-background text-foreground relative pb-20 shadow-2xl overflow-x-hidden border-x border-border/10">
-      <main className="flex-1 w-full overflow-y-auto overflow-x-hidden p-4">
+      {/* Notification Bell — top-right corner */}
+      <div className="fixed top-3 right-3 z-50 max-w-[430px]">
+        <Link
+          href="/notifications"
+          className="relative w-9 h-9 flex items-center justify-center bg-card/90 backdrop-blur-md border border-border rounded-xl shadow-sm hover:bg-muted transition-colors"
+        >
+          <Bell className="w-4 h-4 text-muted-foreground" />
+          {unreadCount > 0 && (
+            <span className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] flex items-center justify-center bg-primary text-primary-foreground text-[10px] font-black rounded-full px-1 leading-none">
+              {unreadCount > 99 ? "99+" : unreadCount}
+            </span>
+          )}
+        </Link>
+      </div>
+
+      <main className="flex-1 w-full overflow-y-auto overflow-x-hidden p-4 pt-5">
         {children}
       </main>
       <nav className="fixed bottom-0 w-full max-w-[430px] bg-card/95 backdrop-blur-md border-t border-border flex justify-around items-center py-2 px-1 z-50">

@@ -1,2 +1,3 @@
 - [Referral system architecture](referral-system.md) — centralized processReferral(), DB-stored referredBy column, ?startapp= link format, second-pass via DB fallback.
 - [Referral refactor — 2025-06-26](referral-refactor-2026.md) — atomic transaction, referral_events table, admin repair tool, Drizzle unique-violation wrapping quirk.
+- [Wallet Dashboard + Notification System](wallet-notification-system.md) — transaction recording strategy, notification delivery, wallet stats from source tables not transactions table.

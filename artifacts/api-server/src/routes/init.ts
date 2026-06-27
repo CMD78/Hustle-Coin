@@ -12,6 +12,8 @@ import {
   WELCOME_BONUS,
   processReferral,
   logReferralEvent,
+  recordTransaction,
+  createNotification,
 } from "../lib/hustlecoin";
 
 const router: IRouter = Router();
@@ -102,11 +104,15 @@ router.post("/init", async (req, res): Promise<void> => {
         await db.update(usersTable).set({ balance: WELCOME_BONUS }).where(eq(usersTable.telegramId, telegramId));
         [user] = await db.select().from(usersTable).where(eq(usersTable.telegramId, telegramId));
         referralStatus = "skipped_referrer_not_found";
+        await recordTransaction({ telegramId, type: "welcome_bonus", amount: WELCOME_BONUS, balanceBefore: 0, balanceAfter: WELCOME_BONUS, description: "Welcome bonus" });
+        await createNotification({ telegramId, title: "Welcome to HustleCoin! 🎉", message: `You received +${WELCOME_BONUS} HC as a welcome bonus!`, type: "wallet_credit" });
         req.log.info({ telegramId, referredBy: effectiveReferredBy }, "[INIT] referrer not found — welcome bonus granted");
       } else {
         await db.update(usersTable).set({ balance: WELCOME_BONUS }).where(eq(usersTable.telegramId, telegramId));
         [user] = await db.select().from(usersTable).where(eq(usersTable.telegramId, telegramId));
         referralStatus = `skipped_${result.reason ?? "unknown"}`;
+        await recordTransaction({ telegramId, type: "welcome_bonus", amount: WELCOME_BONUS, balanceBefore: 0, balanceAfter: WELCOME_BONUS, description: "Welcome bonus" });
+        await createNotification({ telegramId, title: "Welcome to HustleCoin! 🎉", message: `You received +${WELCOME_BONUS} HC as a welcome bonus!`, type: "wallet_credit" });
         req.log.info({ telegramId, referredBy: effectiveReferredBy, reason: result.reason }, "[INIT] referral skipped — welcome bonus granted");
       }
 
@@ -115,6 +121,8 @@ router.post("/init", async (req, res): Promise<void> => {
       referralStatus = "welcome_bonus_only";
       await db.update(usersTable).set({ balance: WELCOME_BONUS }).where(eq(usersTable.telegramId, telegramId));
       [user] = await db.select().from(usersTable).where(eq(usersTable.telegramId, telegramId));
+      await recordTransaction({ telegramId, type: "welcome_bonus", amount: WELCOME_BONUS, balanceBefore: 0, balanceAfter: WELCOME_BONUS, description: "Welcome bonus" });
+      await createNotification({ telegramId, title: "Welcome to HustleCoin! 🎉", message: `You received +${WELCOME_BONUS} HC as a welcome bonus!`, type: "wallet_credit" });
       req.log.info({ telegramId }, "[INIT] new user, no referral — welcome bonus granted");
     }
 

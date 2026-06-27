@@ -18,6 +18,8 @@ import Referrals from "@/pages/referrals";
 import Leaderboard from "@/pages/leaderboard";
 import Profile from "@/pages/profile";
 import Wallet from "@/pages/wallet";
+import Notifications from "@/pages/notifications";
+import NotificationSettings from "@/pages/notification-settings";
 import Admin from "@/pages/admin";
 import Feedback from "@/pages/feedback";
 import TelegramStatus from "@/pages/telegram-status";
@@ -46,6 +48,8 @@ function Router() {
         <Route path="/leaderboard" component={Leaderboard} />
         <Route path="/profile" component={Profile} />
         <Route path="/wallet" component={Wallet} />
+        <Route path="/notifications" component={Notifications} />
+        <Route path="/notification-settings" component={NotificationSettings} />
         <Route path="/feedback" component={Feedback} />
         <Route path="/admin" component={Admin} />
         <Route path="/telegram-status" component={TelegramStatus} />
