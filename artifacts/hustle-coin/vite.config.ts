@@ -5,7 +5,7 @@ import path from "path";
 import runtimeErrorOverlay from "@replit/vite-plugin-runtime-error-modal";
 
 export default defineConfig(async () => {
-  const port = 5000;
+  const port = 23063;
   const basePath = "/";
 
   return {

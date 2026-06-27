@@ -1166,12 +1166,12 @@ export default function Admin() {
                 {/* Diagnostic answers */}
                 <div className="space-y-1.5">
                   {[
-                    { label: "Link received?", ok: debugResult.diagnostics?.link_received, detail: debugResult.diagnostics?.link_received ? "Yes — link_opened event found" : "No — no link_opened event" },
-                    { label: "referredBy stored?", ok: debugResult.diagnostics?.referred_by_stored, detail: debugResult.user_record?.referred_by ? `Stored: ${debugResult.user_record.referred_by}` : "Not stored" },
-                    { label: "Referral row exists?", ok: debugResult.diagnostics?.referral_row_exists, detail: debugResult.diagnostics?.referral_row_exists ? `Row created` : "No row in referrals table" },
-                    { label: "Referee rewarded?", ok: debugResult.diagnostics?.referee_rewarded, detail: debugResult.diagnostics?.referee_rewarded ? `+${debugResult.referral_as_referee?.row?.referee_hp_earned ?? 250} HC` : "Not credited" },
-                    { label: "Referrer rewarded?", ok: debugResult.diagnostics?.referrer_rewarded, detail: debugResult.diagnostics?.referrer_rewarded ? `+${debugResult.referral_as_referee?.row?.referrer_hp_earned ?? 500} HC` : "Not credited" },
-                    { label: "Duplicate detected?", ok: !debugResult.diagnostics?.duplicate_detected, detail: debugResult.diagnostics?.duplicate_detected ? "Duplicate event found" : "No duplicate" },
+                    { label: "Link received?", ok: debugResult.diagnosis?.link_opened_event_found, detail: debugResult.diagnosis?.link_opened_event_found ? "Yes — link_opened event found" : "No — no link_opened event" },
+                    { label: "referredBy stored?", ok: debugResult.diagnosis?.referrer_stored_event_found, detail: debugResult.user_record?.referredBy_in_db ? `Stored: ${debugResult.user_record.referredBy_in_db}` : "Not stored" },
+                    { label: "Referral row exists?", ok: debugResult.diagnosis?.referral_credited, detail: debugResult.diagnosis?.referral_credited ? "Row created" : "No row in referrals table" },
+                    { label: "Referee rewarded?", ok: debugResult.diagnosis?.reward_credited_event_found, detail: debugResult.diagnosis?.reward_credited_event_found ? `+${debugResult.referral_as_referee?.row?.referee_hp_earned ?? 250} HC` : "Not credited" },
+                    { label: "Referrer rewarded?", ok: debugResult.referral_as_referee?.has_referral_row && (debugResult.referral_as_referee?.row?.referrer_hp_earned ?? 0) > 0, detail: debugResult.referral_as_referee?.has_referral_row ? `+${debugResult.referral_as_referee?.row?.referrer_hp_earned ?? 0} HC` : "Not credited" },
+                    { label: "Duplicate detected?", ok: !debugResult.diagnosis?.duplicate_event_found, detail: debugResult.diagnosis?.duplicate_event_found ? "Duplicate event found" : "No duplicate" },
                   ].map(d => (
                     <div key={d.label} className={`flex items-center gap-3 p-2.5 rounded-xl border ${d.ok ? "border-green-500/20 bg-green-500/5" : "border-amber-500/20 bg-amber-500/5"}`}>
                       <div className={`w-2 h-2 rounded-full shrink-0 ${d.ok ? "bg-green-500" : "bg-amber-500"}`} />
@@ -1190,8 +1190,8 @@ export default function Admin() {
                   <div className="flex justify-between"><span className="text-muted-foreground">Balance</span><span className="font-mono font-bold">{(debugResult.user_record?.balance ?? 0).toLocaleString()} HC</span></div>
                   <div className="flex justify-between"><span className="text-muted-foreground">Referred by</span><span className="font-mono">{debugResult.user_record?.referred_by ?? "—"}</span></div>
                   <div className="flex justify-between"><span className="text-muted-foreground">Referrals made</span><span className="font-mono">{(debugResult.referrals_as_referrer ?? []).length}</span></div>
-                  {debugResult.diagnostics?.failure_reason && (
-                    <div className="flex justify-between"><span className="text-muted-foreground">Failure reason</span><span className="font-mono text-red-400">{debugResult.diagnostics.failure_reason}</span></div>
+                  {debugResult.diagnosis?.failure_reason && (
+                    <div className="flex justify-between"><span className="text-muted-foreground">Failure reason</span><span className="font-mono text-red-400">{debugResult.diagnosis.failure_reason}</span></div>
                   )}
                 </div>
 
