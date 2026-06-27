@@ -15,6 +15,7 @@ import {
   recordTransaction,
   createNotification,
 } from "../lib/hustlecoin";
+import { recordInitTrace } from "../lib/init-trace";
 
 const router: IRouter = Router();
 
@@ -65,6 +66,46 @@ router.post("/init", async (req, res): Promise<void> => {
 
   let [user] = await db.select().from(usersTable).where(eq(usersTable.telegramId, telegramId));
   let referralStatus = "no_referral";
+
+  // ── TEMPORARY DIAGNOSTICS TRACE ──────────────────────────────────────────
+  const traceAppShortname = process.env.APP_SHORTNAME ?? null;
+  const traceBotUsername = process.env.BOT_USERNAME ?? "HustleCoinMinerBot";
+  const traceReferralLink = traceAppShortname
+    ? `https://t.me/${traceBotUsername}/${traceAppShortname}?startapp=${telegramId}`
+    : `https://t.me/${traceBotUsername}?start=${telegramId}`;
+  const rawInitData = parsed.data.initData ?? null;
+  const startParamFromInitData = rawInitData
+    ? (new URLSearchParams(rawInitData).get("start_param") ?? null)
+    : null;
+  recordInitTrace({
+    timestamp: new Date().toISOString(),
+    telegramId,
+    username: parsed.data.username,
+    is_new_user: !user,
+    raw_init_data: rawInitData,
+    start_param_from_init_data: startParamFromInitData,
+    request_body_referred_by: parsed.data.referredBy,
+    effective_referred_by: effectiveReferredBy,
+    app_shortname: traceAppShortname,
+    bot_username: traceBotUsername,
+    referral_link: traceReferralLink,
+    referral_link_uses_startapp: !!traceAppShortname,
+  });
+  req.log.info(
+    {
+      telegramId,
+      is_new_user: !user,
+      start_param_from_init_data: startParamFromInitData,
+      raw_init_data_present: !!rawInitData,
+      raw_init_data_length: rawInitData?.length ?? 0,
+      request_body_referred_by: parsed.data.referredBy ?? null,
+      effective_referred_by: effectiveReferredBy,
+      referral_link_uses_startapp: !!traceAppShortname,
+      referral_link: traceReferralLink,
+    },
+    "[INIT TRACE] referral parameter trace"
+  );
+  // ── END TEMPORARY DIAGNOSTICS TRACE ───────────────────────────────────────
 
   if (!user) {
     // ── NEW USER ─────────────────────────────────────────────────────────────

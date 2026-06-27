@@ -1,5 +1,6 @@
 import { Router, type IRouter } from "express";
 import { db, usersTable, referralsTable, referralEventsTable, achievementUnlocksTable, miningLogsTable, adminLogsTable, feedbackTable, taskCompletionsTable, tasksTable } from "@workspace/db";
+import { getInitTraces, getAllTracedUsers } from "../lib/init-trace";
 import { eq, gte, ilike, or, desc, sql, and } from "drizzle-orm";
 import {
   GetAdminStatsQueryParams, GetAdminStatsResponse,
@@ -624,6 +625,70 @@ router.get("/admin/referral-debug/:telegramId", async (req, res): Promise<void> 
       duplicate_event_found: recentEvents.some(e => e.step === "duplicate_referral"),
       failure_reason: failureReason,
     },
+  });
+});
+
+// ── GET /api/admin/referral-trace/:telegramId ──────────────────────────────
+// Temporary diagnostic endpoint — returns the last 5 /api/init call traces
+// for a given user, including everything the backend received and computed
+// about the referral parameter on each call.
+//
+// Fields per trace:
+//   timestamp                   — when /api/init was called
+//   is_new_user                 — true on first call, false on subsequent
+//   raw_init_data               — tg.initData string sent by the frontend
+//   raw_init_data_present       — whether initData was non-empty
+//   start_param_from_init_data  — start_param parsed from raw initData
+//   request_body_referred_by    — req.body.referredBy as received
+//   effective_referred_by       — after self-referral filter (null = dropped)
+//   referral_link               — the link this user shares with others
+//   referral_link_uses_startapp — true = ?startapp= | false = ?start= (broken)
+//   app_shortname               — APP_SHORTNAME env value at request time
+//
+// Auth: adminTelegramId query param must match ADMIN_TELEGRAM_ID.
+// ─────────────────────────────────────────────────────────────────────────────
+router.get("/admin/referral-trace/:telegramId", (req, res): void => {
+  const adminId = String(req.query.adminTelegramId ?? req.query.telegramId ?? "");
+  if (!isAdmin(adminId)) { res.status(403).json({ error: "Forbidden" }); return; }
+
+  const targetId = req.params.telegramId;
+  const traces = getInitTraces(targetId);
+
+  res.json({
+    queried_at: new Date().toISOString(),
+    target_telegram_id: targetId,
+    trace_count: traces.length,
+    note: traces.length === 0
+      ? "No traces yet — the user must open the app (triggering /api/init) after the server restarted. Traces are in-memory and reset on server restart."
+      : null,
+    traces: traces.map(t => ({
+      timestamp: t.timestamp,
+      is_new_user: t.is_new_user,
+      username: t.username ?? null,
+      raw_init_data_present: !!t.raw_init_data,
+      raw_init_data_length: t.raw_init_data?.length ?? 0,
+      raw_init_data: t.raw_init_data,
+      start_param_from_init_data: t.start_param_from_init_data,
+      request_body_referred_by: t.request_body_referred_by ?? null,
+      effective_referred_by: t.effective_referred_by,
+      referral_link_uses_startapp: t.referral_link_uses_startapp,
+      referral_link: t.referral_link,
+      app_shortname: t.app_shortname,
+      bot_username: t.bot_username,
+      verdict: (() => {
+        if (!t.raw_init_data) return "NO_INIT_DATA — frontend did not send tg.initData";
+        if (!t.start_param_from_init_data && !t.request_body_referred_by)
+          return "NO_REFERRAL — start_param absent from initData and referredBy not sent";
+        if (!t.start_param_from_init_data && t.request_body_referred_by)
+          return "REFERRAL_FROM_FALLBACK — start_param absent but referredBy came from another source (URL param or localStorage)";
+        if (t.start_param_from_init_data && t.request_body_referred_by)
+          return "REFERRAL_PRESENT — start_param found in initData and referredBy sent";
+        if (t.start_param_from_init_data && !t.request_body_referred_by)
+          return "BUG — start_param present in initData but frontend did not send referredBy";
+        return "UNKNOWN";
+      })(),
+    })),
+    all_traced_users: getAllTracedUsers(),
   });
 });
 
