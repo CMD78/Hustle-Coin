@@ -7,7 +7,7 @@ import {
   CreateTaskBody, UpdateTaskParams, UpdateTaskBody, UpdateTaskResponse,
   ApproveTaskCompletionParams, ApproveTaskCompletionBody, ApproveTaskCompletionResponse,
 } from "@workspace/api-zod";
-import { ADMIN_TELEGRAM_ID, updateQuestProgress } from "../lib/hustlecoin";
+import { ADMIN_TELEGRAM_ID, updateQuestProgress, recordTransaction, createNotification } from "../lib/hustlecoin";
 
 const router: IRouter = Router();
 
@@ -262,7 +262,24 @@ router.post("/admin/tasks/:taskId/approve", async (req, res): Promise<void> => {
 
   const [user] = await db.select().from(usersTable).where(eq(usersTable.telegramId, telegramId));
   if (user) {
-    await db.update(usersTable).set({ balance: user.balance + task.reward }).where(eq(usersTable.telegramId, telegramId));
+    const newBalance = user.balance + task.reward;
+    await db.update(usersTable).set({ balance: newBalance }).where(eq(usersTable.telegramId, telegramId));
+    await recordTransaction({
+      telegramId,
+      type: "task_reward",
+      amount: task.reward,
+      balanceBefore: user.balance,
+      balanceAfter: newBalance,
+      description: `Task approved: ${task.title}`,
+      relatedId: String(task.id),
+    });
+    await createNotification({
+      telegramId,
+      title: "Task Approved! ✅",
+      message: `Your submission for "${task.title}" was approved. You earned +${task.reward} HC!`,
+      type: "task_approved",
+      relatedEntity: String(task.id),
+    });
   }
 
   res.json(ApproveTaskCompletionResponse.parse({
